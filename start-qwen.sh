@@ -89,7 +89,7 @@ case $choice in
         echo ""
         echo "Starting with DUAL GPU configuration..."
         GPU_LAYERS=999
-        TENSOR_SPLIT="--tensor-split 45,55"
+        TENSOR_SPLIT="--tensor-split 50,50"
         CTX_SIZE=262144
         PORT=8085
         CUDA_DEVICES="0,1"  # Use both GPUs
