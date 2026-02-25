@@ -6,10 +6,12 @@
 LOG_DIR=~/qwen-service
 PID_FILE_CODER=~/qwen-service/qwen-server.pid
 PID_FILE_VL=~/qwen-service/qwen-vl-server.pid
+PID_FILE_VL4B=~/qwen-service/qwen-vl4b-server.pid
 BACKEND_FILE=~/qwen-service/qwen-server.backend
 PORT_CODER=8085
 PORT_VL=8086
 PORT_27B=8087
+PORT_VL4B=8088
 PID_FILE_27B=~/qwen-service/qwen-27b-server.pid
 
 # NCCL tuning for RTX PRO 6000 Blackwell (SM120, PCIe PHB topology, no NVLink):
@@ -97,13 +99,16 @@ echo ""
 echo "1) Qwen3-Coder-Next      (port $PORT_CODER)"
 echo "   Coding assistant, tool calling, 131K context  [vLLM or llama.cpp]"
 echo ""
-echo "2) Qwen3-VL-32B          (port $PORT_VL)"
-echo "   Vision-language, multimodal, 32K-64K context  [vLLM]"
+echo "2) Qwen3-VL-4B           (port $PORT_VL4B)"
+echo "   Vision-language, single GPU, run alongside Coder  [vLLM, FP8]"
 echo ""
-echo "3) Qwen3.5-27B           (port $PORT_27B)"
+echo "3) Qwen3-VL-32B          (port $PORT_VL)"
+echo "   Vision-language, multimodal, 32K-64K context  [vLLM, FP8]"
+echo ""
+echo "4) Qwen3.5-27B           (port $PORT_27B)"
 echo "   General reasoning + vision, 262K context      [vLLM, FP8]"
 echo ""
-read -p "Enter choice [1-3]: " model_choice
+read -p "Enter choice [1-4]: " model_choice
 
 # ─────────────────────────────────────────────
 # QWEN3-CODER-NEXT
@@ -419,9 +424,137 @@ if [ "$model_choice" == "1" ]; then
     fi
 
 # ─────────────────────────────────────────────
-# QWEN3-VL-32B
+# QWEN3-VL-4B
 # ─────────────────────────────────────────────
 elif [ "$model_choice" == "2" ]; then
+
+    if [ -f "$PID_FILE_VL4B" ]; then
+        PID=$(cat "$PID_FILE_VL4B")
+        if ps -p $PID > /dev/null 2>&1; then
+            echo "VL-4B server already running with PID $PID"
+            exit 1
+        fi
+    fi
+
+    MODEL_PATH=~/models/qwen3/Qwen3-VL-4B-Instruct-FP8
+    LOG_FILE=$LOG_DIR/qwen-vl4b-vllm.log
+
+    if [ ! -d "$MODEL_PATH" ]; then
+        echo ""
+        echo "Model not found at $MODEL_PATH"
+        echo "Download with:"
+        echo "  huggingface-cli download Qwen/Qwen3-VL-4B-Instruct-FP8 --local-dir $MODEL_PATH"
+        exit 1
+    fi
+
+    echo ""
+    echo "Choose GPU configuration:"
+    echo ""
+    echo "1) Single GPU (0.85 util, ~131K context)"
+    echo "   - Run alongside Coder on the other GPU"
+    echo ""
+    echo "2) Single GPU (0.30 util, ~64K context)"
+    echo "   - Lower util, more headroom on the GPU"
+    echo ""
+    echo "3) Dual GPU - Solo (0.85 util, ~262K context)"
+    echo "   - Max context, both GPUs"
+    echo ""
+    read -p "Enter choice [1-3]: " gpu_choice
+
+    case $gpu_choice in
+        1)
+            echo ""
+            echo "Which GPU to use?"
+            echo "  0) GPU 0"
+            echo "  1) GPU 1"
+            read -p "Enter GPU [0-1]: " gpu_id
+            case $gpu_id in
+                0|1)
+                    CUDA_DEVICES="$gpu_id"
+                    OTHER_GPU=$(( 1 - gpu_id ))
+                    echo ""
+                    echo "Starting on GPU $gpu_id (GPU $OTHER_GPU remains free)..."
+                    ;;
+                *)
+                    echo "Invalid GPU. Exiting."
+                    exit 1
+                    ;;
+            esac
+            TP_SIZE=1
+            GPU_UTIL=0.85
+            MAX_MODEL_LEN=131072
+            GPU_LABEL="Single GPU $gpu_id (0.85 util)"
+            ;;
+        2)
+            echo ""
+            echo "Which GPU to use?"
+            echo "  0) GPU 0"
+            echo "  1) GPU 1"
+            read -p "Enter GPU [0-1]: " gpu_id
+            case $gpu_id in
+                0|1)
+                    CUDA_DEVICES="$gpu_id"
+                    OTHER_GPU=$(( 1 - gpu_id ))
+                    echo ""
+                    echo "Starting on GPU $gpu_id (GPU $OTHER_GPU remains free)..."
+                    ;;
+                *)
+                    echo "Invalid GPU. Exiting."
+                    exit 1
+                    ;;
+            esac
+            TP_SIZE=1
+            GPU_UTIL=0.30
+            MAX_MODEL_LEN=32768
+            GPU_LABEL="Single GPU $gpu_id (0.30 util)"
+            ;;
+        3)
+            CUDA_DEVICES="0,1"
+            TP_SIZE=2
+            GPU_UTIL=0.85
+            MAX_MODEL_LEN=262144
+            GPU_LABEL="Dual GPU - Solo (0.85 util)"
+            ;;
+        *)
+            echo "Invalid choice. Exiting."
+            exit 1
+            ;;
+    esac
+
+    echo ""
+    echo "Configuration:"
+    echo "  Backend:     vLLM"
+    echo "  Model:       Qwen3-VL-4B-FP8"
+    echo "  GPUs:        $GPU_LABEL"
+    echo "  Context:     $MAX_MODEL_LEN tokens"
+    echo "  Port:        $PORT_VL4B"
+    echo ""
+
+    env $NCCL_ENV \
+    CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
+    nohup vllm serve "$MODEL_PATH" \
+        --host 127.0.0.1 \
+        --port $PORT_VL4B \
+        --tensor-parallel-size $TP_SIZE \
+        --max-model-len $MAX_MODEL_LEN \
+        --gpu-memory-utilization $GPU_UTIL \
+        --dtype auto \
+        --trust-remote-code \
+        --served-model-name "Qwen3-VL-4B" \
+        --disable-custom-all-reduce \
+        --limit-mm-per-prompt '{"image": 5, "video": 1}' \
+        > "$LOG_FILE" 2>&1 &
+
+    echo $! > "$PID_FILE_VL4B"
+    echo "Server started with PID $(cat $PID_FILE_VL4B)"
+    echo "Logs: $LOG_FILE"
+    echo ""
+    wait_for_vllm $PORT_VL4B $PID_FILE_VL4B $LOG_FILE
+
+# ─────────────────────────────────────────────
+# QWEN3-VL-32B
+# ─────────────────────────────────────────────
+elif [ "$model_choice" == "3" ]; then
 
     if [ -f "$PID_FILE_VL" ]; then
         PID=$(cat "$PID_FILE_VL")
@@ -504,7 +637,7 @@ elif [ "$model_choice" == "2" ]; then
     echo ""
     wait_for_vllm $PORT_VL $PID_FILE_VL $LOG_FILE
 
-elif [ "$model_choice" == "3" ]; then
+elif [ "$model_choice" == "4" ]; then
 
     if [ -f "$PID_FILE_27B" ]; then
         PID=$(cat "$PID_FILE_27B")

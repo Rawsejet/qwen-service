@@ -1,13 +1,15 @@
 #!/bin/bash
-# Stop Qwen3 model servers (Coder on 8085, VL on 8086, 27B on 8087)
+# Stop Qwen3 model servers (Coder on 8085, VL-32B on 8086, 27B on 8087, VL-4B on 8088)
 # Usage: ./stop-qwen.sh          → interactive choice
 #        ./stop-qwen.sh coder    → stop Coder only
-#        ./stop-qwen.sh vl       → stop VL only
+#        ./stop-qwen.sh vl       → stop VL-32B only
+#        ./stop-qwen.sh vl4b     → stop VL-4B only
 #        ./stop-qwen.sh 27b      → stop 27B only
 #        ./stop-qwen.sh all      → stop everything
 
 PID_FILE_CODER=~/qwen-service/qwen-server.pid
 PID_FILE_VL=~/qwen-service/qwen-vl-server.pid
+PID_FILE_VL4B=~/qwen-service/qwen-vl4b-server.pid
 PID_FILE_27B=~/qwen-service/qwen-27b-server.pid
 BACKEND_FILE=~/qwen-service/qwen-server.backend
 BACKEND_FILE_27B=~/qwen-service/qwen-27b-server.backend
@@ -186,13 +188,24 @@ stop_coder() {
 
 stop_vl() {
     if [ -f "$PID_FILE_VL" ]; then
-        kill_vllm_by_port 8086 "$PID_FILE_VL" "Qwen3-VL (vLLM)"
+        kill_vllm_by_port 8086 "$PID_FILE_VL" "Qwen3-VL-32B (vLLM)"
     else
-        echo "No VL PID file — sweeping port 8086..."
+        echo "No VL-32B PID file — sweeping port 8086..."
         fuser -9k 8086/tcp 2>/dev/null
     fi
     rm -f "$PID_FILE_VL"
-    echo "✓ VL server stopped."
+    echo "✓ VL-32B server stopped."
+}
+
+stop_vl4b() {
+    if [ -f "$PID_FILE_VL4B" ]; then
+        kill_vllm_by_port 8088 "$PID_FILE_VL4B" "Qwen3-VL-4B (vLLM)"
+    else
+        echo "No VL-4B PID file — sweeping port 8088..."
+        fuser -9k 8088/tcp 2>/dev/null
+    fi
+    rm -f "$PID_FILE_VL4B"
+    echo "✓ VL-4B server stopped."
 }
 
 stop_27b() {
@@ -233,35 +246,39 @@ if [ -z "$TARGET" ]; then
     # Detect what's running
     CODER_RUNNING=false
     VL_RUNNING=false
+    VL4B_RUNNING=false
     B27_RUNNING=false
     [ -f "$PID_FILE_CODER" ] && ps -p $(cat "$PID_FILE_CODER") > /dev/null 2>&1 && CODER_RUNNING=true
     [ -f "$PID_FILE_VL" ] && ps -p $(cat "$PID_FILE_VL") > /dev/null 2>&1 && VL_RUNNING=true
+    [ -f "$PID_FILE_VL4B" ] && ps -p $(cat "$PID_FILE_VL4B") > /dev/null 2>&1 && VL4B_RUNNING=true
     [ -f "$PID_FILE_27B" ] && ps -p $(cat "$PID_FILE_27B") > /dev/null 2>&1 && B27_RUNNING=true
-    # Also detect 27B by port if no PID file
-    if ! $B27_RUNNING && ss -tlnp | grep -q ":8087 " 2>/dev/null; then
-        B27_RUNNING=true
-    fi
+    # Also detect by port if no PID file
+    if ! $VL4B_RUNNING && ss -tlnp | grep -q ":8088 " 2>/dev/null; then VL4B_RUNNING=true; fi
+    if ! $B27_RUNNING && ss -tlnp | grep -q ":8087 " 2>/dev/null; then B27_RUNNING=true; fi
 
     echo "========================================="
     echo "  Stop Qwen3 Servers"
     echo "========================================="
     echo ""
     echo "Running:"
-    $CODER_RUNNING && echo "  ✓ Qwen3-Coder  (port 8085)" || echo "  ✗ Qwen3-Coder  (not running)"
-    $VL_RUNNING    && echo "  ✓ Qwen3-VL     (port 8086)" || echo "  ✗ Qwen3-VL     (not running)"
-    $B27_RUNNING   && echo "  ✓ Qwen3.5-27B  (port 8087)" || echo "  ✗ Qwen3.5-27B  (not running)"
+    $CODER_RUNNING  && echo "  ✓ Qwen3-Coder   (port 8085)" || echo "  ✗ Qwen3-Coder   (not running)"
+    $VL_RUNNING     && echo "  ✓ Qwen3-VL-32B  (port 8086)" || echo "  ✗ Qwen3-VL-32B  (not running)"
+    $B27_RUNNING    && echo "  ✓ Qwen3.5-27B   (port 8087)" || echo "  ✗ Qwen3.5-27B   (not running)"
+    $VL4B_RUNNING   && echo "  ✓ Qwen3-VL-4B   (port 8088)" || echo "  ✗ Qwen3-VL-4B   (not running)"
     echo ""
     echo "1) Stop Coder only"
-    echo "2) Stop VL only"
+    echo "2) Stop VL-32B only"
     echo "3) Stop 27B only"
-    echo "4) Stop all"
+    echo "4) Stop VL-4B only"
+    echo "5) Stop all"
     echo ""
-    read -p "Enter choice [1-4]: " choice
+    read -p "Enter choice [1-5]: " choice
     case "$choice" in
         1) TARGET="coder" ;;
         2) TARGET="vl" ;;
         3) TARGET="27b" ;;
-        4) TARGET="all" ;;
+        4) TARGET="vl4b" ;;
+        5) TARGET="all" ;;
         *) echo "Invalid choice. Exiting."; exit 1 ;;
     esac
 fi
@@ -273,18 +290,22 @@ case "$TARGET" in
     vl)
         stop_vl
         ;;
+    vl4b)
+        stop_vl4b
+        ;;
     27b)
         stop_27b
         ;;
     all)
         stop_coder
         stop_vl
+        stop_vl4b
         stop_27b
         kill_all_vllm    # final sweep for any orphaned vLLM workers
         kill_all_sglang  # legacy sweep for any stale SGLang processes
         ;;
     *)
-        echo "Usage: $0 [coder|vl|27b|all]"
+        echo "Usage: $0 [coder|vl|vl4b|27b|all]"
         exit 1
         ;;
 esac
