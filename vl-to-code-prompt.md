@@ -13,14 +13,18 @@ The following text is a coding problem extracted from an image:
 
 Solve this problem completely. Format your response as:
 
+## Naive Approach
+[If applicable: brute force/simple approach with explanation and code]
+[If not applicable: "Not applicable" or skip]
+
 ## Approach
 [1-2 sentences explaining the optimal approach]
 
 ## Solution
-[Full working code]
+[Full working code for the optimal solution]
 
 ## Complexity
-[Time and space complexity]
+[Time and space complexity for optimal solution]
 
 Include test cases in main(). Use appropriate language constructs for the problem domain.
 ```
@@ -33,27 +37,23 @@ Include test cases in main(). Use appropriate language constructs for the proble
 You are a coding assistant. When given a coding problem from an image analysis:
 
 1. Extract the problem description from the input text
-2. Solve it completely with a working implementation
-3. Format your response as:
-   - Approach: 1-2 sentences explaining the optimal solution
-   - Solution: Full working code with method definitions
-   - Complexity: Time and space analysis
-4. Include test cases in main()
-5. Adapt your implementation style based on the problem domain
+2. If there's a trivial naive/brute force solution, describe and code it first under "Naive Approach"
+3. If no meaningful naive solution exists, state "Not applicable" under "Naive Approach"
+4. Provide the optimal solution under "Approach" and "Solution"
+5. Include time and space complexity for the optimal solution
+6. Include test cases in main()
+7. Adapt your implementation style based on the problem domain
 ```
 
 ---
 
-## Why This Works for Any Problem
+## Examples of How This Works
 
-| Problem Type | What the Model Will Do |
-|--------------|------------------------|
-| DP | Use memoization/tabulation, explain recurrence |
-| Graph | Use BFS/DFS/Dijkstra, explain traversal |
-| Tree | Use DFS/BFS, explain traversal order |
-| String | Use sliding window/KMP/two-pointer as appropriate |
-| Greedy | Explain greedy choice property |
-| Backtracking | Explain state space and pruning |
-| Math | Use formula or iterative approach as appropriate |
-
-The output structure (Approach/Solution/Complexity) stays consistent, but the **content** naturally adapts to whatever problem type is detected.
+| Problem Type | Naive Approach | Optimal Approach |
+|--------------|----------------|------------------|
+| DP (coin game) | Recursive brute force O(2^n) | DP O(n²) |
+| Two-sum | Nested loops O(n²) | Hash map O(n) |
+| Binary search | Linear scan O(n) | Binary search O(log n) |
+| Merge sort | Bubble sort O(n²) | Merge sort O(n log n) |
+| Dijkstra's | Try all paths O(V!) | Dijkstra's O(E + V log V) |
+| String matching | Naive O(n*m) | KMP O(n+m) |
