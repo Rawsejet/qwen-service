@@ -542,6 +542,7 @@ elif [ "$model_choice" == "2" ]; then
         --trust-remote-code \
         --served-model-name "Qwen3-VL-4B" \
         --disable-custom-all-reduce \
+        --allowed-local-media-path / \
         --limit-mm-per-prompt '{"image": 5, "video": 1}' \
         > "$LOG_FILE" 2>&1 &
 
