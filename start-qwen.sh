@@ -54,6 +54,40 @@ wait_for_vllm() {
     done
 }
 
+# Like wait_for_vllm but returns (instead of exit 0) so caller can run post-ready steps (e.g. warmup)
+wait_for_vllm_then_continue() {
+    local PORT=$1
+    local PID_FILE=$2
+    local LOG_FILE=$3
+    local START_TIME=$SECONDS
+    local LAST_LINE=""
+    echo "Waiting for server to be ready (typically 1-3 min for vLLM)..."
+    echo "Press Ctrl+C to background — server will keep running."
+    echo ""
+    while true; do
+        if ! kill -0 $(cat "$PID_FILE" 2>/dev/null) 2>/dev/null; then
+            echo ""
+            echo "✗ Server process died. Last 20 lines of log:"
+            tail -20 "$LOG_FILE"
+            exit 1
+        fi
+        if curl -s http://127.0.0.1:$PORT/health > /dev/null 2>&1; then
+            ELAPSED=$(( SECONDS - START_TIME ))
+            echo ""
+            echo "✓ Server is ready! (${ELAPSED}s)"
+            echo ""
+            return 0
+        fi
+        NEW_LINE=$(tail -1 "$LOG_FILE" 2>/dev/null)
+        if [ "$NEW_LINE" != "$LAST_LINE" ]; then
+            ELAPSED=$(( SECONDS - START_TIME ))
+            echo "  [${ELAPSED}s] $NEW_LINE"
+            LAST_LINE="$NEW_LINE"
+        fi
+        sleep 2
+    done
+}
+
 echo "========================================="
 echo "  Qwen3 Model Server"
 echo "========================================="
@@ -67,7 +101,7 @@ echo "2) Qwen3-VL-32B          (port $PORT_VL)"
 echo "   Vision-language, multimodal, 32K-64K context  [vLLM]"
 echo ""
 echo "3) Qwen3.5-27B           (port $PORT_27B)"
-echo "   General reasoning + vision, 262K context      [vLLM, BF16]"
+echo "   General reasoning + vision, 262K context      [vLLM, FP8]"
 echo ""
 read -p "Enter choice [1-3]: " model_choice
 
@@ -480,29 +514,28 @@ elif [ "$model_choice" == "3" ]; then
         fi
     fi
 
-    MODEL_PATH=~/models/qwen3/Qwen3.5-27B
+    MODEL_PATH=~/models/qwen3/Qwen3.5-27B-FP8
     LOG_FILE=$LOG_DIR/qwen-27b-vllm.log
 
     if [ ! -d "$MODEL_PATH" ]; then
         echo ""
         echo "Model not found at $MODEL_PATH"
         echo "Download with:"
-        echo "  huggingface-cli download Qwen/Qwen3.5-27B --local-dir $MODEL_PATH"
+        echo "  huggingface-cli download Qwen/Qwen3.5-27B-FP8 --local-dir $MODEL_PATH"
         exit 1
     fi
 
     echo ""
     echo "Choose GPU configuration:"
     echo ""
-    echo "1) Single GPU (0.85 util, ~131K context)"
-    echo "   - ~54GB weights fit on one GPU"
+    echo "1) Single GPU (0.80 mem, ~131K context)"
     echo "   - Leaves other GPU free"
     echo ""
-    echo "2) Dual GPU - Solo (0.85 util, ~262K context)"
+    echo "2) Dual GPU - Solo (0.80 mem, ~262K context)"
     echo "   - Split across both GPUs for max context"
     echo "   - Coder model should NOT be running"
     echo ""
-    echo "3) Dual GPU - Shared mode (0.55 util, ~131K context)"
+    echo "3) Dual GPU - Shared mode (0.55 mem, ~131K context)"
     echo "   - Leaves room for Coder in shared mode (0.60 util)"
     echo "   - Start Coder first with option 1 → vLLM → Shared mode"
     echo ""
@@ -525,23 +558,23 @@ elif [ "$model_choice" == "3" ]; then
                     ;;
             esac
             TP_SIZE=1
-            GPU_UTIL=0.85
+            MEM_FRAC=0.80
             MAX_MODEL_LEN=131072
-            GPU_LABEL="Single GPU $gpu_id (0.85 util)"
+            GPU_LABEL="Single GPU $gpu_id"
             ;;
         2)
             CUDA_DEVICES="0,1"
             TP_SIZE=2
-            GPU_UTIL=0.85
+            MEM_FRAC=0.80
             MAX_MODEL_LEN=262144
-            GPU_LABEL="Dual GPU - Solo (0.85 util)"
+            GPU_LABEL="Dual GPU - Solo"
             ;;
         3)
             CUDA_DEVICES="0,1"
             TP_SIZE=2
-            GPU_UTIL=0.55
+            MEM_FRAC=0.55
             MAX_MODEL_LEN=131072
-            GPU_LABEL="Dual GPU - Shared mode (0.55 util)"
+            GPU_LABEL="Dual GPU - Shared mode"
             echo ""
             echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
             ;;
@@ -554,28 +587,27 @@ elif [ "$model_choice" == "3" ]; then
     echo ""
     echo "Choose mode:"
     echo ""
-    echo "1) Multimodal + Tools + MTP  (vision, tool calling, speculative decoding)"
-    echo ""
-    echo "2) Multimodal + Tools        (vision + tool calling, no speculative decoding)"
-    echo ""
-    echo "3) Text only                 (fastest — no vision, frees VRAM for more KV cache)"
+    echo "1) Tools             tool calling + reasoning  (use with Claude Code)"
+    echo "2) Tools + MTP       tools + speculative decoding (faster, ~2x tokens/s)"
+    echo "3) Text only         reasoning only, no tool calling, no vision"
+    echo "                     (skips vision encoder, frees VRAM for KV cache)"
     echo ""
     read -p "Enter choice [1-3]: " mode_choice
 
     case $mode_choice in
         1)
-            SPEC_CONFIG='{"method":"qwen3_next_mtp","num_speculative_tokens":2}'
-            MODE_FLAGS="--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder"
-            MODE_LABEL="Multimodal + Tools + MTP"
+            MODE_FLAGS=(--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder)
+            MODE_SPECULATIVE=""
+            MODE_LABEL="Tools"
             ;;
         2)
-            SPEC_CONFIG=""
-            MODE_FLAGS="--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder"
-            MODE_LABEL="Multimodal + Tools"
+            MODE_FLAGS=(--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder)
+            MODE_SPECULATIVE='{"method":"qwen3_next_mtp","num_speculative_tokens":2}'
+            MODE_LABEL="Tools + MTP"
             ;;
         3)
-            SPEC_CONFIG=""
-            MODE_FLAGS="--reasoning-parser qwen3 --language-model-only"
+            MODE_FLAGS=(--reasoning-parser qwen3 --language-model-only)
+            MODE_SPECULATIVE=""
             MODE_LABEL="Text only"
             ;;
         *)
@@ -587,32 +619,32 @@ elif [ "$model_choice" == "3" ]; then
     echo ""
     echo "Choose sampling preset:"
     echo ""
-    echo "1) Thinking / General   temp=1.0, top_p=0.95, top_k=20, presence_penalty=1.5"
-    echo "2) Thinking / Coding    temp=0.6, top_p=0.95, top_k=20, presence_penalty=0.0"
-    echo "3) Instruct / General   temp=0.7, top_p=0.8,  top_k=20, presence_penalty=1.5"
-    echo "4) Instruct / Reasoning temp=1.0, top_p=1.0,  top_k=40, presence_penalty=2.0"
+    echo "1) Thinking / General   temp=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5,  repetition_penalty=1.0"
+    echo "2) Thinking / Coding    temp=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0,  repetition_penalty=1.0"
+    echo "3) Instruct / General   temp=0.7, top_p=0.8,  top_k=20, min_p=0.0, presence_penalty=1.5,  repetition_penalty=1.0"
+    echo "4) Instruct / Reasoning temp=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5,  repetition_penalty=1.0"
     echo ""
     read -p "Enter choice [1-4]: " sampling_choice
 
     case $sampling_choice in
         1)
             SAMPLING_LABEL="Thinking/General"
-            SAMPLING_PARAMS="temperature=1.0, top_p=0.95, top_k=20, presence_penalty=1.5"
+            SAMPLING_PARAMS="temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0"
             ENABLE_THINKING=true
             ;;
         2)
             SAMPLING_LABEL="Thinking/Coding"
-            SAMPLING_PARAMS="temperature=0.6, top_p=0.95, top_k=20, presence_penalty=0.0"
+            SAMPLING_PARAMS="temperature=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0"
             ENABLE_THINKING=true
             ;;
         3)
             SAMPLING_LABEL="Instruct/General"
-            SAMPLING_PARAMS="temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.5"
+            SAMPLING_PARAMS="temperature=0.7, top_p=0.8, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0"
             ENABLE_THINKING=false
             ;;
         4)
             SAMPLING_LABEL="Instruct/Reasoning"
-            SAMPLING_PARAMS="temperature=1.0, top_p=1.0, top_k=40, presence_penalty=2.0"
+            SAMPLING_PARAMS="temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0"
             ENABLE_THINKING=false
             ;;
         *)
@@ -621,27 +653,36 @@ elif [ "$model_choice" == "3" ]; then
             ;;
     esac
 
-    # Save preset to file for claude-local to display
+    # Save preset for reference
     cat > ~/qwen-service/qwen-27b-sampling.conf << CONF
 SAMPLING_LABEL=$SAMPLING_LABEL
 SAMPLING_PARAMS=$SAMPLING_PARAMS
 ENABLE_THINKING=$ENABLE_THINKING
 CONF
 
-    echo "  Note: /think and /no_think are NOT supported on Qwen3.5."
-    echo "        Use enable_thinking=$ENABLE_THINKING in chat_template_kwargs."
-    echo ""
-
     echo ""
     echo "Configuration:"
-    echo "  Backend:     vLLM"
-    echo "  Model:       Qwen3.5-27B (BF16)"
+    echo "  Backend:     vLLM  (conda env: qwen35)"
+    echo "  Model:       Qwen3.5-27B-FP8"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Mode:        $MODE_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  ($SAMPLING_PARAMS)"
     echo "  Context:     $MAX_MODEL_LEN tokens"
     echo "  Port:        $PORT_27B"
     echo ""
+    echo "  Note: /think and /no_think are NOT supported on Qwen3.5."
+    echo "        Use enable_thinking=$ENABLE_THINKING in chat_template_kwargs."
+    echo ""
+
+    # Build speculative config arg as array to preserve JSON quoting
+    SPEC_ARGS=()
+    if [ -n "$MODE_SPECULATIVE" ]; then
+        SPEC_ARGS=("--speculative-config" "$MODE_SPECULATIVE")
+    fi
+
+    # Activate env directly instead of conda run to preserve argument quoting
+    source ~/miniconda3/etc/profile.d/conda.sh
+    conda activate qwen35
 
     env $NCCL_ENV \
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
@@ -649,22 +690,41 @@ CONF
         --host 127.0.0.1 \
         --port $PORT_27B \
         --tensor-parallel-size $TP_SIZE \
+        --gpu-memory-utilization $MEM_FRAC \
         --max-model-len $MAX_MODEL_LEN \
-        --gpu-memory-utilization $GPU_UTIL \
+        --served-model-name "Qwen3.5-27B" \
         --dtype auto \
         --trust-remote-code \
-        --served-model-name "Qwen3.5-27B" \
-        --model-impl transformers \
+        --attention-backend FLASH_ATTN \
         --disable-custom-all-reduce \
-        $MODE_FLAGS \
-        ${SPEC_CONFIG:+--speculative-config "$SPEC_CONFIG"} \
+        "${MODE_FLAGS[@]}" \
+        "${SPEC_ARGS[@]}" \
         > "$LOG_FILE" 2>&1 &
 
     echo $! > "$PID_FILE_27B"
+    echo "vllm" > ~/qwen-service/qwen-27b-server.backend
     echo "Server started with PID $(cat $PID_FILE_27B)"
     echo "Logs: $LOG_FILE"
     echo ""
-    wait_for_vllm $PORT_27B $PID_FILE_27B $LOG_FILE
+    wait_for_vllm_then_continue $PORT_27B $PID_FILE_27B $LOG_FILE
+
+    # Warmup: pay the ~50s Triton compilation cost now, not on the first real request
+    echo "Running warmup request (Triton kernel compilation, ~50s)..."
+    WARMUP_START=$SECONDS
+    curl -s http://127.0.0.1:$PORT_27B/v1/chat/completions \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"model\": \"Qwen3.5-27B\",
+            \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}],
+            \"max_tokens\": 5,
+            \"chat_template_kwargs\": {\"enable_thinking\": true}
+        }" > /dev/null 2>&1
+    WARMUP_ELAPSED=$(( SECONDS - WARMUP_START ))
+    echo "✓ Warmup done (${WARMUP_ELAPSED}s). Server is ready for real requests."
+    echo ""
+    echo "Test with:"
+    echo "  curl http://127.0.0.1:$PORT_27B/v1/models | python3 -m json.tool"
+    echo ""
 
 else
     echo "Invalid choice. Exiting."

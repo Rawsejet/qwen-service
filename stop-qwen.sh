@@ -1,13 +1,16 @@
 #!/bin/bash
-# Stop Qwen3 model servers (Coder on 8085, VL on 8086)
+# Stop Qwen3 model servers (Coder on 8085, VL on 8086, 27B on 8087)
 # Usage: ./stop-qwen.sh          → interactive choice
 #        ./stop-qwen.sh coder    → stop Coder only
 #        ./stop-qwen.sh vl       → stop VL only
+#        ./stop-qwen.sh 27b      → stop 27B only
 #        ./stop-qwen.sh all      → stop everything
 
 PID_FILE_CODER=~/qwen-service/qwen-server.pid
 PID_FILE_VL=~/qwen-service/qwen-vl-server.pid
+PID_FILE_27B=~/qwen-service/qwen-27b-server.pid
 BACKEND_FILE=~/qwen-service/qwen-server.backend
+BACKEND_FILE_27B=~/qwen-service/qwen-27b-server.backend
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -46,6 +49,72 @@ kill_all_vllm() {
     pkill -9 -f "vllm serve" 2>/dev/null
     pkill -9 -f "vllm.entrypoints" 2>/dev/null
     pkill -9 -f "from vllm" 2>/dev/null
+    sleep 2
+}
+
+kill_sglang() {
+    local PID_FILE=$1
+    local PORT=$2
+    local LABEL=${3:-"SGLang server"}
+    echo "Stopping $LABEL (port $PORT)..."
+
+    # Kill by PID file first (gets the main process)
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if ps -p $PID > /dev/null 2>&1; then
+            echo "  Killing main process (PID $PID)..."
+            kill $PID 2>/dev/null
+            for i in {1..10}; do
+                if ! ps -p $PID > /dev/null 2>&1; then break; fi
+                sleep 1
+            done
+            # Force kill if still alive
+            if ps -p $PID > /dev/null 2>&1; then
+                echo "  Force killing PID $PID..."
+                kill -9 $PID 2>/dev/null
+            fi
+        else
+            echo "  Main process not running (stale PID file)."
+        fi
+    fi
+
+    # Kill sglang child processes (schedulers, detokenizer, compile workers)
+    pkill -f "sglang.launch_server.*--port $PORT" 2>/dev/null
+    pkill -f "sglang::scheduler" 2>/dev/null
+    pkill -f "sglang::detokenizer" 2>/dev/null
+    pkill -f "torch._inductor.compile_worker" 2>/dev/null
+    sleep 2
+
+    # Force kill any remaining sglang processes
+    pkill -9 -f "sglang.launch_server.*--port $PORT" 2>/dev/null
+    pkill -9 -f "sglang::scheduler" 2>/dev/null
+    pkill -9 -f "sglang::detokenizer" 2>/dev/null
+    pkill -9 -f "torch._inductor.compile_worker" 2>/dev/null
+
+    # Final sweep: kill anything on the port
+    fuser -9k ${PORT}/tcp 2>/dev/null
+
+    sleep 1
+
+    # Verify
+    if ss -tlnp | grep -q ":${PORT} " 2>/dev/null; then
+        echo "  ⚠ Warning: port $PORT still in use!"
+    else
+        echo "  ✓ Port $PORT is free."
+    fi
+}
+
+kill_all_sglang() {
+    echo "Sweeping all SGLang processes..."
+    pkill -f "sglang.launch_server" 2>/dev/null
+    pkill -f "sglang::scheduler" 2>/dev/null
+    pkill -f "sglang::detokenizer" 2>/dev/null
+    pkill -f "torch._inductor.compile_worker" 2>/dev/null
+    sleep 3
+    pkill -9 -f "sglang.launch_server" 2>/dev/null
+    pkill -9 -f "sglang::scheduler" 2>/dev/null
+    pkill -9 -f "sglang::detokenizer" 2>/dev/null
+    pkill -9 -f "torch._inductor.compile_worker" 2>/dev/null
     sleep 2
 }
 
@@ -102,6 +171,9 @@ stop_coder() {
         llama.cpp)
             kill_llama_cpp "$PID_FILE_CODER"
             ;;
+        sglang)
+            kill_sglang "$PID_FILE_CODER" 8085 "Qwen3-Coder (SGLang)"
+            ;;
         *)
             echo "Unknown backend for Coder — sweeping port 8085..."
             kill_vllm_by_port 8085 "$PID_FILE_CODER" "Qwen3-Coder"
@@ -123,6 +195,27 @@ stop_vl() {
     echo "✓ VL server stopped."
 }
 
+stop_27b() {
+    BACKEND="unknown"
+    [ -f "$BACKEND_FILE_27B" ] && BACKEND=$(cat "$BACKEND_FILE_27B")
+    case "$BACKEND" in
+        vllm)
+            kill_vllm_by_port 8087 "$PID_FILE_27B" "Qwen3.5-27B (vLLM)"
+            ;;
+        sglang)
+            # Legacy: 27B was previously served via SGLang
+            kill_sglang "$PID_FILE_27B" 8087 "Qwen3.5-27B (SGLang)"
+            ;;
+        *)
+            echo "Unknown backend for 27B — sweeping port 8087..."
+            kill_vllm_by_port 8087 "$PID_FILE_27B" "Qwen3.5-27B"
+            kill_sglang "$PID_FILE_27B" 8087 "Qwen3.5-27B (stale SGLang sweep)"
+            ;;
+    esac
+    rm -f "$PID_FILE_27B" "$BACKEND_FILE_27B"
+    echo "✓ 27B server stopped."
+}
+
 show_gpu_status() {
     echo ""
     echo "GPU status:"
@@ -140,26 +233,35 @@ if [ -z "$TARGET" ]; then
     # Detect what's running
     CODER_RUNNING=false
     VL_RUNNING=false
+    B27_RUNNING=false
     [ -f "$PID_FILE_CODER" ] && ps -p $(cat "$PID_FILE_CODER") > /dev/null 2>&1 && CODER_RUNNING=true
     [ -f "$PID_FILE_VL" ] && ps -p $(cat "$PID_FILE_VL") > /dev/null 2>&1 && VL_RUNNING=true
+    [ -f "$PID_FILE_27B" ] && ps -p $(cat "$PID_FILE_27B") > /dev/null 2>&1 && B27_RUNNING=true
+    # Also detect 27B by port if no PID file
+    if ! $B27_RUNNING && ss -tlnp | grep -q ":8087 " 2>/dev/null; then
+        B27_RUNNING=true
+    fi
 
     echo "========================================="
     echo "  Stop Qwen3 Servers"
     echo "========================================="
     echo ""
     echo "Running:"
-    $CODER_RUNNING && echo "  ✓ Qwen3-Coder (port 8085)" || echo "  ✗ Qwen3-Coder (not running)"
-    $VL_RUNNING && echo "  ✓ Qwen3-VL    (port 8086)" || echo "  ✗ Qwen3-VL    (not running)"
+    $CODER_RUNNING && echo "  ✓ Qwen3-Coder  (port 8085)" || echo "  ✗ Qwen3-Coder  (not running)"
+    $VL_RUNNING    && echo "  ✓ Qwen3-VL     (port 8086)" || echo "  ✗ Qwen3-VL     (not running)"
+    $B27_RUNNING   && echo "  ✓ Qwen3.5-27B  (port 8087)" || echo "  ✗ Qwen3.5-27B  (not running)"
     echo ""
     echo "1) Stop Coder only"
     echo "2) Stop VL only"
-    echo "3) Stop all"
+    echo "3) Stop 27B only"
+    echo "4) Stop all"
     echo ""
-    read -p "Enter choice [1-3]: " choice
+    read -p "Enter choice [1-4]: " choice
     case "$choice" in
         1) TARGET="coder" ;;
         2) TARGET="vl" ;;
-        3) TARGET="all" ;;
+        3) TARGET="27b" ;;
+        4) TARGET="all" ;;
         *) echo "Invalid choice. Exiting."; exit 1 ;;
     esac
 fi
@@ -171,13 +273,18 @@ case "$TARGET" in
     vl)
         stop_vl
         ;;
+    27b)
+        stop_27b
+        ;;
     all)
         stop_coder
         stop_vl
-        kill_all_vllm  # final sweep
+        stop_27b
+        kill_all_vllm    # final sweep for any orphaned vLLM workers
+        kill_all_sglang  # legacy sweep for any stale SGLang processes
         ;;
     *)
-        echo "Usage: $0 [coder|vl|all]"
+        echo "Usage: $0 [coder|vl|27b|all]"
         exit 1
         ;;
 esac
