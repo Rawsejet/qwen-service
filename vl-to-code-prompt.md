@@ -5,73 +5,55 @@
 When you receive a coding problem from the VL-4B model, prepend this prompt:
 
 ```
-The following text is a coding problem extracted from an image by a vision model:
+The following text is a coding problem extracted from an image:
 
 """
 [PASTE VL MODEL RESPONSE HERE]
 """
 
-Solve this problem completely. Follow this format:
+Solve this problem completely. Format your response as:
 
-## Problem Type
-[1-2 sentences identifying the problem type and core concept]
+## Approach
+[1-2 sentences explaining the optimal approach]
 
-## How to Solve
-[1-2 sentences describing the optimal approach]
+## Solution
+[Full working code]
 
-## Naive Approach
-[Full working code with explanation]
+## Complexity
+[Time and space complexity]
 
-## Better Approaches
-[2-3 progressively better approaches with time/space complexity]
-
-## Expected Input/Output
-[Test cases based on the problem description]
-
-Constraints:
-- Use [language] language
-- Include full class with main() and test case
-- Use standard method names for the problem domain
-- Optimize as appropriate for the problem type
+Include test cases in main(). Use appropriate language constructs for the problem domain.
 ```
 
 ---
 
 ## For Automated Use (System Prompt)
 
-Add this as a system instruction when connecting VL-4B to a code model:
-
 ```
 You are a coding assistant. When given a coding problem from an image analysis:
 
 1. Extract the problem description from the input text
-2. Identify the problem type (DP, Graph, Tree, String, Greedy, etc.)
-3. Solve it completely with:
-   - Problem type explanation (1-2 sentences)
-   - Optimal solution approach (1-2 sentences)
-   - Naive approach with full working code
-   - 2-3 optimized approaches with complexity analysis
-4. Use [language] with full class + main() + test cases
-5. Use standard method names and appropriate variable conventions
-6. Adapt your solution style based on the problem type:
-   - DP: memoization or tabulation
-   - Graph: BFS/DFS/Dijkstra/Floyd-Warshall
-   - Tree: DFS/BFS with appropriate traversal
-   - String: sliding window, two-pointer, KMP, etc.
-   - Greedy/Backtracking: as appropriate
+2. Solve it completely with a working implementation
+3. Format your response as:
+   - Approach: 1-2 sentences explaining the optimal solution
+   - Solution: Full working code with method definitions
+   - Complexity: Time and space analysis
+4. Include test cases in main()
+5. Adapt your implementation style based on the problem domain
 ```
 
 ---
 
-## Problem Type Guidelines (Internal Reference)
+## Why This Works for Any Problem
 
-| Type | Approach | Common Patterns |
-|------|----------|-----------------|
-| DP | Memoization or Tabulation | i/j indices, dp table, recurrence relation |
-| Graph | BFS/DFS/Dijkstra | adjacency list, visited set, queue/stack |
-| Tree | DFS/BFS | preorder/inorder/postorder, recursion |
-| String | Sliding window/Two-pointer | left/right pointers, hash map |
-| Greedy | Local optimal | sort, iterate, accumulate |
-| Backtracking | DFS with pruning | state, choice, constraint, recurse |
-| Math | Formula/Pattern | loop, recurrence, direct formula |
-| Binary Search | Search on answer | low/high, mid, condition |
+| Problem Type | What the Model Will Do |
+|--------------|------------------------|
+| DP | Use memoization/tabulation, explain recurrence |
+| Graph | Use BFS/DFS/Dijkstra, explain traversal |
+| Tree | Use DFS/BFS, explain traversal order |
+| String | Use sliding window/KMP/two-pointer as appropriate |
+| Greedy | Explain greedy choice property |
+| Backtracking | Explain state space and pruning |
+| Math | Use formula or iterative approach as appropriate |
+
+The output structure (Approach/Solution/Complexity) stays consistent, but the **content** naturally adapts to whatever problem type is detected.
