@@ -23,7 +23,7 @@ curl -s http://127.0.0.1:8088/v1/chat/completions -X POST -H "Content-Type: appl
 ## Process All Images in a Folder
 
 ```bash
-for img in /path/to/your/folder/*.{jpg,png,jpeg}; do
+for img in /Documents/pics/screenshots/*.{jpg,png,jpeg}; do
   if [ -f "$img" ]; then
     echo "=== Processing: $img ==="
     curl -s http://127.0.0.1:8088/v1/chat/completions -X POST -H "Content-Type: application/json" \

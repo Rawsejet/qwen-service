@@ -5,32 +5,10 @@
 When you receive a coding problem from the VL-4B model, prepend this prompt:
 
 ```
-The following text is a coding problem extracted from an image:
+The following text is a coding problem:
 
 """
-[PASTE VL MODEL RESPONSE HERE]
-"""
 
-Solve this problem. Format your response as:
-
-## Naive Approach
-[If applicable: brief brute force approach with code]
-[If not applicable: "Not applicable" or skip]
-
-## Approach
-[1-2 sentences explaining the optimal approach]
-
-## Solution
-[Concise working code with:
-- Brief approach explanation (1-2 sentences)
-- Inline comments on non-obvious logic
-- Clear but concise variable names
-- No verbose explanations or excessive comments]
-
-## Complexity
-[Time and space complexity for optimal solution]
-
-Include test cases in main(). Use appropriate language constructs for the problem domain.
 ```
 
 ---
