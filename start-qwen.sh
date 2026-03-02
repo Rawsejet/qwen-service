@@ -4,15 +4,20 @@
 # Backends: vLLM, llama.cpp
 
 LOG_DIR=~/qwen-service
-PID_FILE_CODER=~/qwen-service/qwen-server.pid
-PID_FILE_VL=~/qwen-service/qwen-vl-server.pid
-PID_FILE_VL4B=~/qwen-service/qwen-vl4b-server.pid
-BACKEND_FILE=~/qwen-service/qwen-server.backend
-PORT_CODER=8085
-PORT_VL=8086
-PORT_27B=8087
-PORT_VL4B=8088
-PID_FILE_27B=~/qwen-service/qwen-27b-server.pid
+
+# Source shared model registry
+source "$LOG_DIR/models.conf"
+
+# Derive convenience aliases from the registry
+PORT_CODER=${MODEL_PORTS[1]}
+PORT_VL4B=${MODEL_PORTS[2]}
+PORT_VL=${MODEL_PORTS[3]}
+PORT_27B=${MODEL_PORTS[4]}
+PID_FILE_CODER=$LOG_DIR/${MODEL_PIDS[1]}
+PID_FILE_VL4B=$LOG_DIR/${MODEL_PIDS[2]}
+PID_FILE_VL=$LOG_DIR/${MODEL_PIDS[3]}
+PID_FILE_27B=$LOG_DIR/${MODEL_PIDS[4]}
+BACKEND_FILE=$LOG_DIR/qwen-server.backend
 
 # NCCL tuning for RTX PRO 6000 Blackwell (SM120, PCIe PHB topology, no NVLink):
 # P2P/CUMEM and P2P/IPC hang on SM120 - working transport is SHM/direct/direct
@@ -96,19 +101,12 @@ echo "========================================="
 echo ""
 echo "Choose model:"
 echo ""
-echo "1) Qwen3-Coder-Next      (port $PORT_CODER)"
-echo "   Coding assistant, tool calling, 131K context  [vLLM or llama.cpp]"
-echo ""
-echo "2) Qwen3-VL-4B           (port $PORT_VL4B)"
-echo "   Vision-language, single GPU, run alongside Coder  [vLLM, FP8]"
-echo ""
-echo "3) Qwen3-VL-32B          (port $PORT_VL)"
-echo "   Vision-language, multimodal, 32K-64K context  [vLLM, FP8]"
-echo ""
-echo "4) Qwen3.5-27B           (port $PORT_27B)"
-echo "   General reasoning + vision, 262K context      [vLLM, FP8]"
-echo ""
-read -p "Enter choice [1-4]: " model_choice
+for i in $(seq 1 $MODEL_COUNT); do
+    printf "%d) %-22s (port %s)\n" "$i" "${MODEL_NAMES[$i]}" "${MODEL_PORTS[$i]}"
+    echo "   ${MODEL_DESCS[$i]}"
+    echo ""
+done
+read -p "Enter choice [1-$MODEL_COUNT]: " model_choice
 
 # ─────────────────────────────────────────────
 # QWEN3-CODER-NEXT
@@ -648,75 +646,163 @@ elif [ "$model_choice" == "4" ]; then
         fi
     fi
 
-    MODEL_PATH=~/models/qwen3/Qwen3.5-27B-FP8
-    LOG_FILE=$LOG_DIR/qwen-27b-vllm.log
+    echo ""
+    echo "Choose model variant:"
+    echo ""
+    echo "1) Qwen3.5-27B-FP8    (~27GB, more context headroom)"
+    echo "2) Qwen3.5-27B        (~54GB BF16, higher fidelity)"
+    echo ""
+    read -p "Enter choice [1-2]: " variant_choice
 
-    if [ ! -d "$MODEL_PATH" ]; then
-        echo ""
-        echo "Model not found at $MODEL_PATH"
-        echo "Download with:"
-        echo "  huggingface-cli download Qwen/Qwen3.5-27B-FP8 --local-dir $MODEL_PATH"
-        exit 1
-    fi
-
-    echo ""
-    echo "Choose GPU configuration:"
-    echo ""
-    echo "1) Single GPU (0.80 mem, ~131K context)"
-    echo "   - Leaves other GPU free"
-    echo ""
-    echo "2) Dual GPU - Solo (0.80 mem, ~262K context)"
-    echo "   - Split across both GPUs for max context"
-    echo "   - Coder model should NOT be running"
-    echo ""
-    echo "3) Dual GPU - Shared mode (0.55 mem, ~131K context)"
-    echo "   - Leaves room for Coder in shared mode (0.60 util)"
-    echo "   - Start Coder first with option 1 → vLLM → Shared mode"
-    echo ""
-    read -p "Enter choice [1-3]: " gpu_choice
-
-    case $gpu_choice in
+    case $variant_choice in
         1)
-            echo ""
-            echo "Which GPU to use?"
-            echo "  0) GPU 0"
-            echo "  1) GPU 1"
-            read -p "Enter GPU [0-1]: " gpu_id
-            case $gpu_id in
-                0|1)
-                    CUDA_DEVICES="$gpu_id"
-                    ;;
-                *)
-                    echo "Invalid GPU. Exiting."
-                    exit 1
-                    ;;
-            esac
-            TP_SIZE=1
-            MEM_FRAC=0.80
-            MAX_MODEL_LEN=131072
-            GPU_LABEL="Single GPU $gpu_id"
+            MODEL_PATH=~/models/qwen3/Qwen3.5-27B-FP8
+            MODEL_LABEL="Qwen3.5-27B-FP8"
+            DOWNLOAD_ID="Qwen/Qwen3.5-27B-FP8"
             ;;
         2)
-            CUDA_DEVICES="0,1"
-            TP_SIZE=2
-            MEM_FRAC=0.80
-            MAX_MODEL_LEN=262144
-            GPU_LABEL="Dual GPU - Solo"
-            ;;
-        3)
-            CUDA_DEVICES="0,1"
-            TP_SIZE=2
-            MEM_FRAC=0.55
-            MAX_MODEL_LEN=131072
-            GPU_LABEL="Dual GPU - Shared mode"
-            echo ""
-            echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+            MODEL_PATH=~/models/qwen3/Qwen3.5-27B
+            MODEL_LABEL="Qwen3.5-27B (BF16)"
+            DOWNLOAD_ID="Qwen/Qwen3.5-27B"
             ;;
         *)
             echo "Invalid choice. Exiting."
             exit 1
             ;;
     esac
+
+    LOG_FILE=$LOG_DIR/qwen-27b-vllm.log
+
+    if [ ! -d "$MODEL_PATH" ]; then
+        echo ""
+        echo "Model not found at $MODEL_PATH"
+        echo "Download with:"
+        echo "  huggingface-cli download $DOWNLOAD_ID --local-dir $MODEL_PATH"
+        exit 1
+    fi
+
+    if [ "$variant_choice" == "1" ]; then
+        # FP8 variant — same as before
+        echo ""
+        echo "Choose GPU configuration:"
+        echo ""
+        echo "1) Single GPU (0.80 mem, ~131K context)"
+        echo "   - Leaves other GPU free"
+        echo ""
+        echo "2) Dual GPU - Solo (0.80 mem, ~262K context)"
+        echo "   - Split across both GPUs for max context"
+        echo "   - Coder model should NOT be running"
+        echo ""
+        echo "3) Dual GPU - Shared mode (0.55 mem, ~131K context)"
+        echo "   - Leaves room for Coder in shared mode (0.60 util)"
+        echo "   - Start Coder first with option 1 → vLLM → Shared mode"
+        echo ""
+        read -p "Enter choice [1-3]: " gpu_choice
+
+        case $gpu_choice in
+            1)
+                echo ""
+                echo "Which GPU to use?"
+                echo "  0) GPU 0"
+                echo "  1) GPU 1"
+                read -p "Enter GPU [0-1]: " gpu_id
+                case $gpu_id in
+                    0|1)
+                        CUDA_DEVICES="$gpu_id"
+                        ;;
+                    *)
+                        echo "Invalid GPU. Exiting."
+                        exit 1
+                        ;;
+                esac
+                TP_SIZE=1
+                MEM_FRAC=0.80
+                MAX_MODEL_LEN=131072
+                GPU_LABEL="Single GPU $gpu_id"
+                ;;
+            2)
+                CUDA_DEVICES="0,1"
+                TP_SIZE=2
+                MEM_FRAC=0.80
+                MAX_MODEL_LEN=262144
+                GPU_LABEL="Dual GPU - Solo"
+                ;;
+            3)
+                CUDA_DEVICES="0,1"
+                TP_SIZE=2
+                MEM_FRAC=0.55
+                MAX_MODEL_LEN=131072
+                GPU_LABEL="Dual GPU - Shared mode"
+                echo ""
+                echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+                ;;
+            *)
+                echo "Invalid choice. Exiting."
+                exit 1
+                ;;
+        esac
+
+    else
+        # BF16 variant — reduced context due to ~2x model size
+        echo ""
+        echo "Choose GPU configuration:"
+        echo ""
+        echo "1) Single GPU (0.80 mem, ~65K context)"
+        echo "   - Leaves other GPU free"
+        echo ""
+        echo "2) Dual GPU - Solo (0.80 mem, ~131K context)"
+        echo "   - Split across both GPUs for max context"
+        echo "   - Coder model should NOT be running"
+        echo ""
+        echo "3) Dual GPU - Shared mode (0.55 mem, ~65K context)"
+        echo "   - Leaves room for Coder in shared mode (0.60 util)"
+        echo "   - Start Coder first with option 1 → vLLM → Shared mode"
+        echo ""
+        read -p "Enter choice [1-3]: " gpu_choice
+
+        case $gpu_choice in
+            1)
+                echo ""
+                echo "Which GPU to use?"
+                echo "  0) GPU 0"
+                echo "  1) GPU 1"
+                read -p "Enter GPU [0-1]: " gpu_id
+                case $gpu_id in
+                    0|1)
+                        CUDA_DEVICES="$gpu_id"
+                        ;;
+                    *)
+                        echo "Invalid GPU. Exiting."
+                        exit 1
+                        ;;
+                esac
+                TP_SIZE=1
+                MEM_FRAC=0.80
+                MAX_MODEL_LEN=65536
+                GPU_LABEL="Single GPU $gpu_id"
+                ;;
+            2)
+                CUDA_DEVICES="0,1"
+                TP_SIZE=2
+                MEM_FRAC=0.80
+                MAX_MODEL_LEN=131072
+                GPU_LABEL="Dual GPU - Solo"
+                ;;
+            3)
+                CUDA_DEVICES="0,1"
+                TP_SIZE=2
+                MEM_FRAC=0.55
+                MAX_MODEL_LEN=65536
+                GPU_LABEL="Dual GPU - Shared mode"
+                echo ""
+                echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+                ;;
+            *)
+                echo "Invalid choice. Exiting."
+                exit 1
+                ;;
+        esac
+    fi
 
     echo ""
     echo "Choose mode:"
@@ -797,7 +883,7 @@ CONF
     echo ""
     echo "Configuration:"
     echo "  Backend:     vLLM  (conda env: qwen35)"
-    echo "  Model:       Qwen3.5-27B-FP8"
+    echo "  Model:       $MODEL_LABEL"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Mode:        $MODE_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  ($SAMPLING_PARAMS)"
