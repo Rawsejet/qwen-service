@@ -822,7 +822,7 @@ elif [ "$model_choice" == "4" ]; then
             ;;
         2)
             MODE_FLAGS=(--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder)
-            MODE_SPECULATIVE='{"method":"qwen3_next_mtp","num_speculative_tokens":2}'
+            MODE_SPECULATIVE='{"method":"mtp","num_speculative_tokens":1}'
             MODE_LABEL="Tools + MTP"
             ;;
         3)
@@ -917,6 +917,7 @@ CONF
         --trust-remote-code \
         --attention-backend FLASH_ATTN \
         --disable-custom-all-reduce \
+        --enable-prefix-caching \
         "${MODE_FLAGS[@]}" \
         "${SPEC_ARGS[@]}" \
         > "$LOG_FILE" 2>&1 &
