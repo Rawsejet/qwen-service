@@ -13,10 +13,12 @@ PORT_CODER=${MODEL_PORTS[1]}
 PORT_VL4B=${MODEL_PORTS[2]}
 PORT_VL=${MODEL_PORTS[3]}
 PORT_27B=${MODEL_PORTS[4]}
+PORT_122B=${MODEL_PORTS[5]}
 PID_FILE_CODER=$LOG_DIR/${MODEL_PIDS[1]}
 PID_FILE_VL4B=$LOG_DIR/${MODEL_PIDS[2]}
 PID_FILE_VL=$LOG_DIR/${MODEL_PIDS[3]}
 PID_FILE_27B=$LOG_DIR/${MODEL_PIDS[4]}
+PID_FILE_122B=$LOG_DIR/${MODEL_PIDS[5]}
 BACKEND_FILE=$LOG_DIR/qwen-server.backend
 
 # NCCL tuning for RTX PRO 6000 Blackwell (SM120, PCIe PHB topology, no NVLink):
@@ -457,7 +459,10 @@ elif [ "$model_choice" == "2" ]; then
     echo "3) Dual GPU - Solo (0.85 util, ~262K context)"
     echo "   - Max context, both GPUs"
     echo ""
-    read -p "Enter choice [1-3]: " gpu_choice
+    echo "4) Dual GPU - Minimal (0.03 util, ~8K context)"
+    echo "   - Tiny footprint, runs alongside heavy models on both GPUs"
+    echo ""
+    read -p "Enter choice [1-4]: " gpu_choice
 
     case $gpu_choice in
         1)
@@ -512,6 +517,13 @@ elif [ "$model_choice" == "2" ]; then
             GPU_UTIL=0.85
             MAX_MODEL_LEN=262144
             GPU_LABEL="Dual GPU - Solo (0.85 util)"
+            ;;
+        4)
+            CUDA_DEVICES="0,1"
+            TP_SIZE=2
+            GPU_UTIL=0.03
+            MAX_MODEL_LEN=8192
+            GPU_LABEL="Dual GPU - Minimal (0.03 util)"
             ;;
         *)
             echo "Invalid choice. Exiting."
@@ -945,6 +957,199 @@ CONF
     echo ""
     echo "Test with:"
     echo "  curl http://127.0.0.1:$PORT_27B/v1/models | python3 -m json.tool"
+    echo ""
+
+elif [ "$model_choice" == "5" ]; then
+
+# ─────────────────────────────────────────────
+# QWEN3.5-122B-A10B
+# ─────────────────────────────────────────────
+
+    if [ -f "$PID_FILE_122B" ]; then
+        PID=$(cat "$PID_FILE_122B")
+        if ps -p $PID > /dev/null 2>&1; then
+            echo "Qwen3.5-122B-A10B server already running with PID $PID"
+            exit 1
+        fi
+    fi
+
+    MODEL_PATH=~/models/qwen3/Qwen3.5-122B-A10B-FP8
+    LOG_FILE=$LOG_DIR/qwen-122b-vllm.log
+
+    if [ ! -d "$MODEL_PATH" ]; then
+        echo ""
+        echo "Model not found at $MODEL_PATH"
+        echo "Download with:"
+        echo "  huggingface-cli download Qwen/Qwen3.5-122B-A10B-FP8 --local-dir $MODEL_PATH"
+        exit 1
+    fi
+
+    echo ""
+    echo "Choose GPU configuration:"
+    echo ""
+    echo "1) Dual GPU - Solo (0.85 util, ~64K context)"
+    echo "   - Full VRAM for model + KV cache"
+    echo "   - Coder model should NOT be running"
+    echo ""
+    echo "2) Dual GPU - Shared mode (0.65 util, ~32K context)"
+    echo "   - Leaves room for Coder in shared mode (0.60 util)"
+    echo "   - Start Coder first with option 1 → vLLM → Shared mode"
+    echo ""
+    read -p "Enter choice [1-2]: " gpu_choice
+
+    case $gpu_choice in
+        1)
+            CUDA_DEVICES="0,1"
+            TP_SIZE=2
+            MEM_FRAC=0.85
+            MAX_MODEL_LEN=65536
+            GPU_LABEL="Dual GPU - Solo"
+            ;;
+        2)
+            CUDA_DEVICES="0,1"
+            TP_SIZE=2
+            MEM_FRAC=0.65
+            MAX_MODEL_LEN=32768
+            GPU_LABEL="Dual GPU - Shared mode"
+            echo ""
+            echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+            ;;
+        *)
+            echo "Invalid choice. Exiting."
+            exit 1
+            ;;
+    esac
+
+    echo ""
+    echo "Choose mode:"
+    echo ""
+    echo "1) Tools             tool calling + reasoning  (use with Claude Code)"
+    echo "2) Tools + MTP       tools + speculative decoding (faster, ~2x tokens/s)"
+    echo "3) Text only         reasoning only, no tool calling"
+    echo ""
+    read -p "Enter choice [1-3]: " mode_choice
+
+    case $mode_choice in
+        1)
+            MODE_FLAGS=(--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder)
+            MODE_SPECULATIVE=""
+            MODE_LABEL="Tools"
+            ;;
+        2)
+            MODE_FLAGS=(--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder)
+            MODE_SPECULATIVE='{"method":"mtp","num_speculative_tokens":1}'
+            MODE_LABEL="Tools + MTP"
+            ;;
+        3)
+            MODE_FLAGS=(--reasoning-parser qwen3)
+            MODE_SPECULATIVE=""
+            MODE_LABEL="Text only"
+            ;;
+        *)
+            echo "Invalid choice. Exiting."
+            exit 1
+            ;;
+    esac
+
+    echo ""
+    echo "Choose sampling preset:"
+    echo ""
+    echo "1) Thinking / General   temp=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5,  repetition_penalty=1.0"
+    echo "2) Thinking / Coding    temp=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0,  repetition_penalty=1.0"
+    echo "3) Instruct / General   temp=0.7, top_p=0.8,  top_k=20, min_p=0.0, presence_penalty=1.5,  repetition_penalty=1.0"
+    echo "4) Instruct / Reasoning temp=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5,  repetition_penalty=1.0"
+    echo ""
+    read -p "Enter choice [1-4]: " sampling_choice
+
+    case $sampling_choice in
+        1)
+            SAMPLING_LABEL="Thinking/General"
+            SAMPLING_PARAMS="temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0"
+            ENABLE_THINKING=true
+            ;;
+        2)
+            SAMPLING_LABEL="Thinking/Coding"
+            SAMPLING_PARAMS="temperature=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0"
+            ENABLE_THINKING=true
+            ;;
+        3)
+            SAMPLING_LABEL="Instruct/General"
+            SAMPLING_PARAMS="temperature=0.7, top_p=0.8, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0"
+            ENABLE_THINKING=false
+            ;;
+        4)
+            SAMPLING_LABEL="Instruct/Reasoning"
+            SAMPLING_PARAMS="temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0"
+            ENABLE_THINKING=false
+            ;;
+        *)
+            echo "Invalid choice. Exiting."
+            exit 1
+            ;;
+    esac
+
+    echo ""
+    echo "Configuration:"
+    echo "  Backend:     vLLM  (conda env: qwen35)"
+    echo "  Model:       Qwen3.5-122B-A10B-FP8"
+    echo "  GPUs:        $GPU_LABEL"
+    echo "  Mode:        $MODE_LABEL"
+    echo "  Sampling:    $SAMPLING_LABEL  ($SAMPLING_PARAMS)"
+    echo "  Context:     $MAX_MODEL_LEN tokens"
+    echo "  Port:        $PORT_122B"
+    echo ""
+    echo "  Note: /think and /no_think are NOT supported on Qwen3.5."
+    echo "        Use enable_thinking=$ENABLE_THINKING in chat_template_kwargs."
+    echo ""
+
+    SPEC_ARGS=()
+    if [ -n "$MODE_SPECULATIVE" ]; then
+        SPEC_ARGS=("--speculative-config" "$MODE_SPECULATIVE")
+    fi
+
+    source ~/miniconda3/etc/profile.d/conda.sh
+    conda activate qwen35
+
+    env $NCCL_ENV \
+    CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
+    nohup vllm serve "$MODEL_PATH" \
+        --host 127.0.0.1 \
+        --port $PORT_122B \
+        --tensor-parallel-size $TP_SIZE \
+        --gpu-memory-utilization $MEM_FRAC \
+        --max-model-len $MAX_MODEL_LEN \
+        --served-model-name "Qwen3.5-122B-A10B" \
+        --dtype auto \
+        --trust-remote-code \
+        --attention-backend FLASH_ATTN \
+        --disable-custom-all-reduce \
+        --enable-prefix-caching \
+        "${MODE_FLAGS[@]}" \
+        "${SPEC_ARGS[@]}" \
+        > "$LOG_FILE" 2>&1 &
+
+    echo $! > "$PID_FILE_122B"
+    echo "vllm" > ~/qwen-service/qwen-122b-server.backend
+    echo "Server started with PID $(cat $PID_FILE_122B)"
+    echo "Logs: $LOG_FILE"
+    echo ""
+    wait_for_vllm_then_continue $PORT_122B $PID_FILE_122B $LOG_FILE
+
+    echo "Running warmup request (Triton kernel compilation, ~50s)..."
+    WARMUP_START=$SECONDS
+    curl -s http://127.0.0.1:$PORT_122B/v1/chat/completions \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"model\": \"Qwen3.5-122B-A10B\",
+            \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}],
+            \"max_tokens\": 5,
+            \"chat_template_kwargs\": {\"enable_thinking\": true}
+        }" > /dev/null 2>&1
+    WARMUP_ELAPSED=$(( SECONDS - WARMUP_START ))
+    echo "✓ Warmup done (${WARMUP_ELAPSED}s). Server is ready for real requests."
+    echo ""
+    echo "Test with:"
+    echo "  curl http://127.0.0.1:$PORT_122B/v1/models | python3 -m json.tool"
     echo ""
 
 else

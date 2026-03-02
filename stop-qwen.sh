@@ -1,18 +1,21 @@
 #!/bin/bash
-# Stop Qwen3 model servers (Coder on 8085, VL-32B on 8086, 27B on 8087, VL-4B on 8088)
+# Stop Qwen3 model servers (Coder on 8085, VL-32B on 8086, 27B on 8087, VL-4B on 8088, 122B on 8089)
 # Usage: ./stop-qwen.sh          → interactive choice
 #        ./stop-qwen.sh coder    → stop Coder only
 #        ./stop-qwen.sh vl       → stop VL-32B only
 #        ./stop-qwen.sh vl4b     → stop VL-4B only
 #        ./stop-qwen.sh 27b      → stop 27B only
+#        ./stop-qwen.sh 122b     → stop 122B only
 #        ./stop-qwen.sh all      → stop everything
 
 PID_FILE_CODER=~/qwen-service/qwen-server.pid
 PID_FILE_VL=~/qwen-service/qwen-vl-server.pid
 PID_FILE_VL4B=~/qwen-service/qwen-vl4b-server.pid
 PID_FILE_27B=~/qwen-service/qwen-27b-server.pid
+PID_FILE_122B=~/qwen-service/qwen-122b-server.pid
 BACKEND_FILE=~/qwen-service/qwen-server.backend
 BACKEND_FILE_27B=~/qwen-service/qwen-27b-server.backend
+BACKEND_FILE_122B=~/qwen-service/qwen-122b-server.backend
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -44,13 +47,35 @@ kill_vllm_by_port() {
 
 kill_all_vllm() {
     echo "Sweeping all vLLM processes..."
+
+    # Kill by port for all known model ports
+    for PORT in 8085 8086 8087 8088 8089; do
+        fuser -k ${PORT}/tcp 2>/dev/null
+    done
+
+    # Kill by cmdline patterns (catches the main serve process and entrypoint workers)
     pkill -f "vllm serve" 2>/dev/null
     pkill -f "vllm.entrypoints" 2>/dev/null
+    pkill -f "vllm.worker" 2>/dev/null
+    pkill -f "vllm.executor" 2>/dev/null
     pkill -f "from vllm" 2>/dev/null
+
+    # Kill by process name (vLLM renames its workers to VLLM::EngineCore, VLLM::Worker_TP*, etc.)
+    pkill "VLLM" 2>/dev/null
+
     sleep 3
+
+    # Force-kill any survivors
+    for PORT in 8085 8086 8087 8088 8089; do
+        fuser -9k ${PORT}/tcp 2>/dev/null
+    done
     pkill -9 -f "vllm serve" 2>/dev/null
     pkill -9 -f "vllm.entrypoints" 2>/dev/null
+    pkill -9 -f "vllm.worker" 2>/dev/null
+    pkill -9 -f "vllm.executor" 2>/dev/null
     pkill -9 -f "from vllm" 2>/dev/null
+    pkill -9 "VLLM" 2>/dev/null
+
     sleep 2
 }
 
@@ -229,6 +254,17 @@ stop_27b() {
     echo "✓ 27B server stopped."
 }
 
+stop_122b() {
+    if [ -f "$PID_FILE_122B" ]; then
+        kill_vllm_by_port 8089 "$PID_FILE_122B" "Qwen3.5-122B-A10B (vLLM)"
+    else
+        echo "No 122B PID file — sweeping port 8089..."
+        fuser -9k 8089/tcp 2>/dev/null
+    fi
+    rm -f "$PID_FILE_122B" "$BACKEND_FILE_122B"
+    echo "✓ 122B server stopped."
+}
+
 show_gpu_status() {
     echo ""
     echo "GPU status:"
@@ -248,37 +284,43 @@ if [ -z "$TARGET" ]; then
     VL_RUNNING=false
     VL4B_RUNNING=false
     B27_RUNNING=false
+    B122_RUNNING=false
     [ -f "$PID_FILE_CODER" ] && ps -p $(cat "$PID_FILE_CODER") > /dev/null 2>&1 && CODER_RUNNING=true
     [ -f "$PID_FILE_VL" ] && ps -p $(cat "$PID_FILE_VL") > /dev/null 2>&1 && VL_RUNNING=true
     [ -f "$PID_FILE_VL4B" ] && ps -p $(cat "$PID_FILE_VL4B") > /dev/null 2>&1 && VL4B_RUNNING=true
     [ -f "$PID_FILE_27B" ] && ps -p $(cat "$PID_FILE_27B") > /dev/null 2>&1 && B27_RUNNING=true
+    [ -f "$PID_FILE_122B" ] && ps -p $(cat "$PID_FILE_122B") > /dev/null 2>&1 && B122_RUNNING=true
     # Also detect by port if no PID file
     if ! $VL4B_RUNNING && ss -tlnp | grep -q ":8088 " 2>/dev/null; then VL4B_RUNNING=true; fi
     if ! $B27_RUNNING && ss -tlnp | grep -q ":8087 " 2>/dev/null; then B27_RUNNING=true; fi
+    if ! $B122_RUNNING && ss -tlnp | grep -q ":8089 " 2>/dev/null; then B122_RUNNING=true; fi
 
     echo "========================================="
     echo "  Stop Qwen3 Servers"
     echo "========================================="
     echo ""
     echo "Running:"
-    $CODER_RUNNING  && echo "  ✓ Qwen3-Coder   (port 8085)" || echo "  ✗ Qwen3-Coder   (not running)"
-    $VL_RUNNING     && echo "  ✓ Qwen3-VL-32B  (port 8086)" || echo "  ✗ Qwen3-VL-32B  (not running)"
-    $B27_RUNNING    && echo "  ✓ Qwen3.5-27B   (port 8087)" || echo "  ✗ Qwen3.5-27B   (not running)"
-    $VL4B_RUNNING   && echo "  ✓ Qwen3-VL-4B   (port 8088)" || echo "  ✗ Qwen3-VL-4B   (not running)"
+    $CODER_RUNNING  && echo "  ✓ Qwen3-Coder        (port 8085)" || echo "  ✗ Qwen3-Coder        (not running)"
+    $VL_RUNNING     && echo "  ✓ Qwen3-VL-32B       (port 8086)" || echo "  ✗ Qwen3-VL-32B       (not running)"
+    $B27_RUNNING    && echo "  ✓ Qwen3.5-27B        (port 8087)" || echo "  ✗ Qwen3.5-27B        (not running)"
+    $VL4B_RUNNING   && echo "  ✓ Qwen3-VL-4B        (port 8088)" || echo "  ✗ Qwen3-VL-4B        (not running)"
+    $B122_RUNNING   && echo "  ✓ Qwen3.5-122B-A10B  (port 8089)" || echo "  ✗ Qwen3.5-122B-A10B  (not running)"
     echo ""
     echo "1) Stop Coder only"
     echo "2) Stop VL-32B only"
     echo "3) Stop 27B only"
     echo "4) Stop VL-4B only"
-    echo "5) Stop all"
+    echo "5) Stop 122B only"
+    echo "6) Stop all"
     echo ""
-    read -p "Enter choice [1-5]: " choice
+    read -p "Enter choice [1-6]: " choice
     case "$choice" in
         1) TARGET="coder" ;;
         2) TARGET="vl" ;;
         3) TARGET="27b" ;;
         4) TARGET="vl4b" ;;
-        5) TARGET="all" ;;
+        5) TARGET="122b" ;;
+        6) TARGET="all" ;;
         *) echo "Invalid choice. Exiting."; exit 1 ;;
     esac
 fi
@@ -296,16 +338,20 @@ case "$TARGET" in
     27b)
         stop_27b
         ;;
+    122b)
+        stop_122b
+        ;;
     all)
         stop_coder
         stop_vl
         stop_vl4b
         stop_27b
+        stop_122b
         kill_all_vllm    # final sweep for any orphaned vLLM workers
         kill_all_sglang  # legacy sweep for any stale SGLang processes
         ;;
     *)
-        echo "Usage: $0 [coder|vl|vl4b|27b|all]"
+        echo "Usage: $0 [coder|vl|vl4b|27b|122b|all]"
         exit 1
         ;;
 esac
