@@ -1305,12 +1305,16 @@ elif [ "$model_choice" == "6" ]; then
 
     echo ""
     echo "Configuration:"
-    echo "  Backend:     vLLM"
+    echo "  Backend:     vLLM  (conda env: qwen35)"
     echo "  Model:       OmniCoder-9B"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Context:     $MAX_MODEL_LEN tokens"
     echo "  Port:        $PORT_OMNICODER"
     echo ""
+
+    # Activate env with vLLM 0.16.1+ which supports Qwen3_5ForConditionalGeneration
+    source ~/miniconda3/etc/profile.d/conda.sh
+    conda activate qwen35
 
     env $NCCL_ENV \
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
@@ -1320,7 +1324,6 @@ elif [ "$model_choice" == "6" ]; then
         --tensor-parallel-size $TP_SIZE \
         --max-model-len $MAX_MODEL_LEN \
         --gpu-memory-utilization $GPU_UTIL \
-        --model-impl transformers \
         --enable-auto-tool-choice \
         --tool-call-parser qwen3_coder \
         --reasoning-parser qwen3 \
