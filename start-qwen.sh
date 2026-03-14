@@ -19,6 +19,8 @@ PID_FILE_VL4B=$LOG_DIR/${MODEL_PIDS[2]}
 PID_FILE_VL=$LOG_DIR/${MODEL_PIDS[3]}
 PID_FILE_27B=$LOG_DIR/${MODEL_PIDS[4]}
 PID_FILE_122B=$LOG_DIR/${MODEL_PIDS[5]}
+PORT_OMNICODER=${MODEL_PORTS[6]}
+PID_FILE_OMNICODER=$LOG_DIR/${MODEL_PIDS[6]}
 BACKEND_FILE=$LOG_DIR/qwen-server.backend
 
 # NCCL tuning for RTX PRO 6000 Blackwell (SM120, PCIe PHB topology, no NVLink):
@@ -355,13 +357,40 @@ if [ "$model_choice" == "1" ]; then
         esac
 
         echo ""
+        echo "Choose concurrent requests (parallel slots):"
+        echo ""
+        echo "1) 1 slot  - Single request at a time (lowest memory)"
+        echo "2) 2 slots - 2 concurrent requests (~2x context memory)"
+        echo "3) 4 slots - 4 concurrent requests (~4x context memory)"
+        echo "4) 8 slots - 8 concurrent requests (~8x context memory)"
+        echo ""
+        read -p "Enter choice [1-4]: " parallel_choice
+
+        case $parallel_choice in
+            1) PARALLEL_SLOTS=1 ;;
+            2) PARALLEL_SLOTS=2 ;;
+            3) PARALLEL_SLOTS=4 ;;
+            4) PARALLEL_SLOTS=8 ;;
+            *)
+                echo "Invalid choice. Using 2 slots."
+                PARALLEL_SLOTS=2
+                ;;
+        esac
+
+        echo ""
         echo "Configuration:"
         echo "  Backend:     llama.cpp"
         echo "  Model:       $MODEL_NAME"
         echo "  GPUs:        $SPLIT_LABEL"
         echo "  Context:     $CTX_SIZE tokens"
+        echo "  Parallel:    $PARALLEL_SLOTS slot(s)"
         echo "  Port:        $PORT_CODER"
         echo ""
+
+        if [ "$PARALLEL_SLOTS" -ge 4 ] && [ "$CTX_SIZE" -ge 131072 ]; then
+            echo "  WARNING: High context + 4+ parallel slots = very high KV cache memory"
+            echo ""
+        fi
 
         if [ -z "$TENSOR_SPLIT" ] && ([ "$CTX_SIZE" -gt 170000 ] || [[ "$MODEL_PATH" == *"UD-Q8_K_XL"* ]]); then
             CURRENT_SWAP=$(grep "^/swap.img" /proc/swaps | awk '{print $3}')
@@ -385,6 +414,7 @@ if [ "$model_choice" == "1" ]; then
             --model "$MODEL_PATH" \
             --jinja \
             --n-gpu-layers $GPU_LAYERS \
+            --parallel $PARALLEL_SLOTS \
             $TENSOR_SPLIT \
             --ctx-size $CTX_SIZE \
             --flash-attn on \
@@ -987,30 +1017,52 @@ elif [ "$model_choice" == "5" ]; then
     echo ""
     echo "Choose GPU configuration:"
     echo ""
-    echo "1) Dual GPU - Solo (0.85 util, ~64K context)"
-    echo "   - Full VRAM for model + KV cache"
-    echo "   - Coder model should NOT be running"
+    echo "1) Dual GPU - Solo Max (0.90 util, ~256K context)"
+    echo "   - Maximum context, high VRAM usage"
+    echo "   - Coder model must NOT be running"
     echo ""
-    echo "2) Dual GPU - Shared mode (0.65 util, ~32K context)"
+    echo "2) Dual GPU - Solo High (0.90 util, ~128K context)"
+    echo "   - High context with slightly lower VRAM pressure"
+    echo "   - Coder model must NOT be running"
+    echo ""
+    echo "3) Dual GPU - Solo Medium (0.75 util, ~64K context)"
+    echo "   - Balanced: good context, stable performance"
+    echo "   - Coder model must NOT be running"
+    echo ""
+    echo "4) Dual GPU - Shared mode (0.65 util, ~32K context)"
     echo "   - Leaves room for Coder in shared mode (0.60 util)"
     echo "   - Start Coder first with option 1 → vLLM → Shared mode"
     echo ""
-    read -p "Enter choice [1-2]: " gpu_choice
+    read -p "Enter choice [1-4]: " gpu_choice
 
     case $gpu_choice in
         1)
             CUDA_DEVICES="0,1"
             TP_SIZE=2
-            MEM_FRAC=0.85
-            MAX_MODEL_LEN=65536
-            GPU_LABEL="Dual GPU - Solo"
+            MEM_FRAC=0.90
+            MAX_MODEL_LEN=262144
+            GPU_LABEL="Dual GPU - Solo Max (0.90 util)"
             ;;
         2)
             CUDA_DEVICES="0,1"
             TP_SIZE=2
+            MEM_FRAC=0.90
+            MAX_MODEL_LEN=131072
+            GPU_LABEL="Dual GPU - Solo High (0.90 util)"
+            ;;
+        3)
+            CUDA_DEVICES="0,1"
+            TP_SIZE=2
+            MEM_FRAC=0.75
+            MAX_MODEL_LEN=65536
+            GPU_LABEL="Dual GPU - Solo Medium (0.75 util)"
+            ;;
+        4)
+            CUDA_DEVICES="0,1"
+            TP_SIZE=2
             MEM_FRAC=0.65
             MAX_MODEL_LEN=32768
-            GPU_LABEL="Dual GPU - Shared mode"
+            GPU_LABEL="Dual GPU - Shared mode (0.65 util)"
             echo ""
             echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
             ;;
@@ -1151,6 +1203,137 @@ elif [ "$model_choice" == "5" ]; then
     echo "Test with:"
     echo "  curl http://127.0.0.1:$PORT_122B/v1/models | python3 -m json.tool"
     echo ""
+
+elif [ "$model_choice" == "6" ]; then
+
+# ─────────────────────────────────────────────
+# OMNICODER-9B
+# ─────────────────────────────────────────────
+
+    if [ -f "$PID_FILE_OMNICODER" ]; then
+        PID=$(cat "$PID_FILE_OMNICODER")
+        if ps -p $PID > /dev/null 2>&1; then
+            echo "OmniCoder-9B server already running with PID $PID"
+            exit 1
+        fi
+    fi
+
+    MODEL_PATH=~/models/qwen3/omnicoder-9b
+    LOG_FILE=$LOG_DIR/omnicoder-9b-vllm.log
+
+    if [ ! -d "$MODEL_PATH" ]; then
+        echo ""
+        echo "Model not found at $MODEL_PATH"
+        echo "Download with:"
+        echo "  huggingface-cli download Tesslate/OmniCoder-9B --local-dir $MODEL_PATH"
+        exit 1
+    fi
+
+    echo ""
+    echo "Choose GPU configuration:"
+    echo ""
+    echo "1) Single GPU (0.85 util, ~131K context)"
+    echo "   - Leaves the other GPU free"
+    echo ""
+    echo "2) Single GPU (0.40 util, ~65K context)"
+    echo "   - Low footprint, run alongside other models"
+    echo ""
+    echo "3) Dual GPU (0.85 util, ~262K context)"
+    echo "   - Max context, both GPUs"
+    echo ""
+    read -p "Enter choice [1-3]: " gpu_choice
+
+    case $gpu_choice in
+        1)
+            echo ""
+            echo "Which GPU to use?"
+            echo "  0) GPU 0"
+            echo "  1) GPU 1"
+            read -p "Enter GPU [0-1]: " gpu_id
+            case $gpu_id in
+                0|1)
+                    CUDA_DEVICES="$gpu_id"
+                    OTHER_GPU=$(( 1 - gpu_id ))
+                    echo ""
+                    echo "Starting on GPU $gpu_id (GPU $OTHER_GPU remains free)..."
+                    ;;
+                *)
+                    echo "Invalid GPU. Exiting."
+                    exit 1
+                    ;;
+            esac
+            TP_SIZE=1
+            GPU_UTIL=0.85
+            MAX_MODEL_LEN=131072
+            GPU_LABEL="Single GPU $gpu_id (0.85 util)"
+            ;;
+        2)
+            echo ""
+            echo "Which GPU to use?"
+            echo "  0) GPU 0"
+            echo "  1) GPU 1"
+            read -p "Enter GPU [0-1]: " gpu_id
+            case $gpu_id in
+                0|1)
+                    CUDA_DEVICES="$gpu_id"
+                    OTHER_GPU=$(( 1 - gpu_id ))
+                    echo ""
+                    echo "Starting on GPU $gpu_id (GPU $OTHER_GPU remains free)..."
+                    ;;
+                *)
+                    echo "Invalid GPU. Exiting."
+                    exit 1
+                    ;;
+            esac
+            TP_SIZE=1
+            GPU_UTIL=0.40
+            MAX_MODEL_LEN=65536
+            GPU_LABEL="Single GPU $gpu_id (0.40 util)"
+            ;;
+        3)
+            CUDA_DEVICES="0,1"
+            TP_SIZE=2
+            GPU_UTIL=0.85
+            MAX_MODEL_LEN=262144
+            GPU_LABEL="Dual GPU (0.85 util)"
+            ;;
+        *)
+            echo "Invalid choice. Exiting."
+            exit 1
+            ;;
+    esac
+
+    echo ""
+    echo "Configuration:"
+    echo "  Backend:     vLLM"
+    echo "  Model:       OmniCoder-9B"
+    echo "  GPUs:        $GPU_LABEL"
+    echo "  Context:     $MAX_MODEL_LEN tokens"
+    echo "  Port:        $PORT_OMNICODER"
+    echo ""
+
+    env $NCCL_ENV \
+    CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
+    nohup vllm serve "$MODEL_PATH" \
+        --host 127.0.0.1 \
+        --port $PORT_OMNICODER \
+        --tensor-parallel-size $TP_SIZE \
+        --max-model-len $MAX_MODEL_LEN \
+        --gpu-memory-utilization $GPU_UTIL \
+        --enable-auto-tool-choice \
+        --tool-call-parser qwen3_coder \
+        --reasoning-parser qwen3 \
+        --dtype auto \
+        --trust-remote-code \
+        --served-model-name "OmniCoder-9B" \
+        --disable-custom-all-reduce \
+        > "$LOG_FILE" 2>&1 &
+
+    echo $! > "$PID_FILE_OMNICODER"
+    echo "Server started with PID $(cat $PID_FILE_OMNICODER)"
+    echo "Logs: $LOG_FILE"
+    echo ""
+    wait_for_vllm $PORT_OMNICODER $PID_FILE_OMNICODER $LOG_FILE
 
 else
     echo "Invalid choice. Exiting."
