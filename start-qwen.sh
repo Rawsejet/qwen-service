@@ -1320,6 +1320,7 @@ elif [ "$model_choice" == "6" ]; then
         --tensor-parallel-size $TP_SIZE \
         --max-model-len $MAX_MODEL_LEN \
         --gpu-memory-utilization $GPU_UTIL \
+        --model-impl transformers \
         --enable-auto-tool-choice \
         --tool-call-parser qwen3_coder \
         --reasoning-parser qwen3 \
