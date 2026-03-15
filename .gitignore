@@ -1,2 +1,4 @@
 *.log
 *.pid
+nohup.out
+feedback.md
