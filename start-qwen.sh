@@ -27,7 +27,7 @@ BACKEND_FILE=$LOG_DIR/qwen-server.backend
 # P2P/CUMEM and P2P/IPC hang on SM120 - working transport is SHM/direct/direct
 # NCCL_P2P_DISABLE=1 + NCCL_CUMEM_ENABLE=0 forces SHM transport which works
 # --disable-custom-all-reduce required: vLLM's custom all-reduce IPC also hangs on SM120
-NCCL_ENV="NCCL_P2P_DISABLE=1 NCCL_CUMEM_ENABLE=0 NCCL_IB_DISABLE=1 VLLM_ENGINE_CORE_STARTUP_TIMEOUT=300"
+NCCL_ENV="NCCL_P2P_DISABLE=1 NCCL_CUMEM_ENABLE=0 NCCL_IB_DISABLE=1 VLLM_ENGINE_CORE_STARTUP_TIMEOUT=300 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 
 wait_for_vllm() {
     local PORT=$1
@@ -864,7 +864,15 @@ elif [ "$model_choice" == "4" ]; then
             ;;
         2)
             MODE_FLAGS=(--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder)
-            MODE_SPECULATIVE='{"method":"mtp","num_speculative_tokens":1}'
+            echo ""
+            echo "Choose MTP tokens:"
+            echo "  1) 3 tokens (multi-user)"
+            echo "  2) 5 tokens (single-user)"
+            read -p "Enter choice [1-2]: " mtp_choice
+            case $mtp_choice in
+                2) MODE_SPECULATIVE='{"method":"mtp","num_speculative_tokens":5}' ;;
+                *) MODE_SPECULATIVE='{"method":"mtp","num_speculative_tokens":3}' ;;
+            esac
             MODE_LABEL="Tools + MTP"
             ;;
         3)
@@ -960,6 +968,7 @@ CONF
         --attention-backend FLASH_ATTN \
         --disable-custom-all-reduce \
         --enable-prefix-caching \
+        --enable-chunked-prefill \
         "${MODE_FLAGS[@]}" \
         "${SPEC_ARGS[@]}" \
         > "$LOG_FILE" 2>&1 &
@@ -1089,7 +1098,15 @@ elif [ "$model_choice" == "5" ]; then
             ;;
         2)
             MODE_FLAGS=(--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder)
-            MODE_SPECULATIVE='{"method":"mtp","num_speculative_tokens":1}'
+            echo ""
+            echo "Choose MTP tokens:"
+            echo "  1) 3 tokens (multi-user)"
+            echo "  2) 5 tokens (single-user)"
+            read -p "Enter choice [1-2]: " mtp_choice
+            case $mtp_choice in
+                2) MODE_SPECULATIVE='{"method":"mtp","num_speculative_tokens":5}' ;;
+                *) MODE_SPECULATIVE='{"method":"mtp","num_speculative_tokens":3}' ;;
+            esac
             MODE_LABEL="Tools + MTP"
             ;;
         3)
@@ -1176,6 +1193,7 @@ elif [ "$model_choice" == "5" ]; then
         --attention-backend FLASH_ATTN \
         --disable-custom-all-reduce \
         --enable-prefix-caching \
+        --enable-chunked-prefill \
         "${MODE_FLAGS[@]}" \
         "${SPEC_ARGS[@]}" \
         > "$LOG_FILE" 2>&1 &
