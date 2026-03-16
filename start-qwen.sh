@@ -789,10 +789,10 @@ elif [ "$model_choice" == "4" ]; then
         echo ""
         echo "Choose GPU configuration:"
         echo ""
-        echo "1) Single GPU (0.80 mem, ~65K context)"
+        echo "1) Single GPU (0.85 mem, ~65K context)"
         echo "   - Leaves other GPU free"
         echo ""
-        echo "2) Dual GPU - Solo (0.80 mem, ~131K context)"
+        echo "2) Dual GPU - Solo (0.85 mem, ~141K context)"
         echo "   - Split across both GPUs for max context"
         echo "   - Coder model should NOT be running"
         echo ""
@@ -819,14 +819,14 @@ elif [ "$model_choice" == "4" ]; then
                         ;;
                 esac
                 TP_SIZE=1
-                MEM_FRAC=0.80
+                MEM_FRAC=0.85
                 MAX_MODEL_LEN=65536
                 GPU_LABEL="Single GPU $gpu_id"
                 ;;
             2)
                 CUDA_DEVICES="0,1"
                 TP_SIZE=2
-                MEM_FRAC=0.80
+                MEM_FRAC=0.85
                 MAX_MODEL_LEN=131072
                 GPU_LABEL="Dual GPU - Solo"
                 ;;
