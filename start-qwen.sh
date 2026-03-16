@@ -924,7 +924,7 @@ CONF
 
     echo ""
     echo "Configuration:"
-    echo "  Backend:     vLLM  (conda env: qwen35)"
+    echo "  Backend:     vLLM  (conda env: vllm)"
     echo "  Model:       $MODEL_LABEL"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Mode:        $MODE_LABEL"
@@ -944,7 +944,7 @@ CONF
 
     # Activate env directly instead of conda run to preserve argument quoting
     source ~/miniconda3/etc/profile.d/conda.sh
-    conda activate qwen35
+    conda activate vllm
 
     env $NCCL_ENV \
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
@@ -1142,7 +1142,7 @@ elif [ "$model_choice" == "5" ]; then
 
     echo ""
     echo "Configuration:"
-    echo "  Backend:     vLLM  (conda env: qwen35)"
+    echo "  Backend:     vLLM  (conda env: vllm)"
     echo "  Model:       Qwen3.5-122B-A10B-FP8"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Mode:        $MODE_LABEL"
@@ -1160,7 +1160,7 @@ elif [ "$model_choice" == "5" ]; then
     fi
 
     source ~/miniconda3/etc/profile.d/conda.sh
-    conda activate qwen35
+    conda activate vllm
 
     env $NCCL_ENV \
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
@@ -1305,16 +1305,16 @@ elif [ "$model_choice" == "6" ]; then
 
     echo ""
     echo "Configuration:"
-    echo "  Backend:     vLLM  (conda env: qwen35)"
+    echo "  Backend:     vLLM  (conda env: vllm)"
     echo "  Model:       OmniCoder-9B"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Context:     $MAX_MODEL_LEN tokens"
     echo "  Port:        $PORT_OMNICODER"
     echo ""
 
-    # Activate env with vLLM 0.16.1+ which supports Qwen3_5ForConditionalGeneration
+    # Activate env with vLLM 0.17.1+ (cu130) which supports Qwen3_5ForConditionalGeneration
     source ~/miniconda3/etc/profile.d/conda.sh
-    conda activate qwen35
+    conda activate vllm
 
     env $NCCL_ENV \
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
