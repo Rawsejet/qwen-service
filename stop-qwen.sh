@@ -1,5 +1,5 @@
 #!/bin/bash
-# Stop Qwen3 model servers (Coder on 8085, VL-32B on 8086, 27B on 8087, VL-4B on 8088, 122B on 8089, OmniCoder on 8090)
+# Stop Qwen3 model servers
 # Usage: ./stop-qwen.sh              → interactive choice
 #        ./stop-qwen.sh coder        → stop Coder only
 #        ./stop-qwen.sh vl           → stop VL-32B only
@@ -7,6 +7,8 @@
 #        ./stop-qwen.sh 27b          → stop 27B only
 #        ./stop-qwen.sh 122b         → stop 122B only
 #        ./stop-qwen.sh omnicoder    → stop OmniCoder-9B only
+#        ./stop-qwen.sh agg35b       → stop Aggressive-35B only
+#        ./stop-qwen.sh agg27b       → stop Aggressive-27B only
 #        ./stop-qwen.sh all          → stop everything
 
 PID_FILE_CODER=~/qwen-service/qwen-server.pid
@@ -15,6 +17,8 @@ PID_FILE_VL4B=~/qwen-service/qwen-vl4b-server.pid
 PID_FILE_27B=~/qwen-service/qwen-27b-server.pid
 PID_FILE_122B=~/qwen-service/qwen-122b-server.pid
 PID_FILE_OMNICODER=~/qwen-service/omnicoder-9b-server.pid
+PID_FILE_AGG35B=~/qwen-service/aggressive-35b-server.pid
+PID_FILE_AGG27B=~/qwen-service/aggressive-27b-server.pid
 BACKEND_FILE=~/qwen-service/qwen-server.backend
 BACKEND_FILE_27B=~/qwen-service/qwen-27b-server.backend
 BACKEND_FILE_122B=~/qwen-service/qwen-122b-server.backend
@@ -51,7 +55,7 @@ kill_all_vllm() {
     echo "Sweeping all vLLM processes..."
 
     # Kill by port for all known model ports
-    for PORT in 8085 8086 8087 8088 8089 8090; do
+    for PORT in 8085 8086 8087 8088 8089 8090 8091 8092; do
         fuser -k ${PORT}/tcp 2>/dev/null
     done
 
@@ -278,6 +282,20 @@ stop_omnicoder() {
     echo "✓ OmniCoder-9B server stopped."
 }
 
+stop_agg35b() {
+    kill_llama_cpp "$PID_FILE_AGG35B"
+    fuser -9k 8091/tcp 2>/dev/null
+    rm -f "$PID_FILE_AGG35B" ~/qwen-service/aggressive-35b-server.backend
+    echo "✓ Aggressive-35B server stopped."
+}
+
+stop_agg27b() {
+    kill_llama_cpp "$PID_FILE_AGG27B"
+    fuser -9k 8092/tcp 2>/dev/null
+    rm -f "$PID_FILE_AGG27B" ~/qwen-service/aggressive-27b-server.backend
+    echo "✓ Aggressive-27B server stopped."
+}
+
 show_gpu_status() {
     echo ""
     echo "GPU status:"
@@ -299,17 +317,23 @@ if [ -z "$TARGET" ]; then
     B27_RUNNING=false
     B122_RUNNING=false
     OMNICODER_RUNNING=false
+    AGG35B_RUNNING=false
+    AGG27B_RUNNING=false
     [ -f "$PID_FILE_CODER" ] && ps -p $(cat "$PID_FILE_CODER") > /dev/null 2>&1 && CODER_RUNNING=true
     [ -f "$PID_FILE_VL" ] && ps -p $(cat "$PID_FILE_VL") > /dev/null 2>&1 && VL_RUNNING=true
     [ -f "$PID_FILE_VL4B" ] && ps -p $(cat "$PID_FILE_VL4B") > /dev/null 2>&1 && VL4B_RUNNING=true
     [ -f "$PID_FILE_27B" ] && ps -p $(cat "$PID_FILE_27B") > /dev/null 2>&1 && B27_RUNNING=true
     [ -f "$PID_FILE_122B" ] && ps -p $(cat "$PID_FILE_122B") > /dev/null 2>&1 && B122_RUNNING=true
     [ -f "$PID_FILE_OMNICODER" ] && ps -p $(cat "$PID_FILE_OMNICODER") > /dev/null 2>&1 && OMNICODER_RUNNING=true
+    [ -f "$PID_FILE_AGG35B" ] && ps -p $(cat "$PID_FILE_AGG35B") > /dev/null 2>&1 && AGG35B_RUNNING=true
+    [ -f "$PID_FILE_AGG27B" ] && ps -p $(cat "$PID_FILE_AGG27B") > /dev/null 2>&1 && AGG27B_RUNNING=true
     # Also detect by port if no PID file
     if ! $VL4B_RUNNING && ss -tlnp | grep -q ":8088 " 2>/dev/null; then VL4B_RUNNING=true; fi
     if ! $B27_RUNNING && ss -tlnp | grep -q ":8087 " 2>/dev/null; then B27_RUNNING=true; fi
     if ! $B122_RUNNING && ss -tlnp | grep -q ":8089 " 2>/dev/null; then B122_RUNNING=true; fi
     if ! $OMNICODER_RUNNING && ss -tlnp | grep -q ":8090 " 2>/dev/null; then OMNICODER_RUNNING=true; fi
+    if ! $AGG35B_RUNNING && ss -tlnp | grep -q ":8091 " 2>/dev/null; then AGG35B_RUNNING=true; fi
+    if ! $AGG27B_RUNNING && ss -tlnp | grep -q ":8092 " 2>/dev/null; then AGG27B_RUNNING=true; fi
 
     echo "========================================="
     echo "  Stop Qwen3 Servers"
@@ -322,6 +346,8 @@ if [ -z "$TARGET" ]; then
     $VL4B_RUNNING      && echo "  ✓ Qwen3-VL-4B        (port 8088)" || echo "  ✗ Qwen3-VL-4B        (not running)"
     $B122_RUNNING      && echo "  ✓ Qwen3.5-122B-A10B  (port 8089)" || echo "  ✗ Qwen3.5-122B-A10B  (not running)"
     $OMNICODER_RUNNING && echo "  ✓ OmniCoder-9B       (port 8090)" || echo "  ✗ OmniCoder-9B       (not running)"
+    $AGG35B_RUNNING    && echo "  ✓ Aggressive-35B-A3B (port 8091)" || echo "  ✗ Aggressive-35B-A3B (not running)"
+    $AGG27B_RUNNING    && echo "  ✓ Aggressive-27B     (port 8092)" || echo "  ✗ Aggressive-27B     (not running)"
     echo ""
     echo "1) Stop Coder only"
     echo "2) Stop VL-32B only"
@@ -329,9 +355,11 @@ if [ -z "$TARGET" ]; then
     echo "4) Stop VL-4B only"
     echo "5) Stop 122B only"
     echo "6) Stop OmniCoder-9B only"
-    echo "7) Stop all"
+    echo "7) Stop Aggressive-35B only"
+    echo "8) Stop Aggressive-27B only"
+    echo "9) Stop all"
     echo ""
-    read -p "Enter choice [1-7]: " choice
+    read -p "Enter choice [1-9]: " choice
     case "$choice" in
         1) TARGET="coder" ;;
         2) TARGET="vl" ;;
@@ -339,7 +367,9 @@ if [ -z "$TARGET" ]; then
         4) TARGET="vl4b" ;;
         5) TARGET="122b" ;;
         6) TARGET="omnicoder" ;;
-        7) TARGET="all" ;;
+        7) TARGET="agg35b" ;;
+        8) TARGET="agg27b" ;;
+        9) TARGET="all" ;;
         *) echo "Invalid choice. Exiting."; exit 1 ;;
     esac
 fi
@@ -363,6 +393,12 @@ case "$TARGET" in
     omnicoder)
         stop_omnicoder
         ;;
+    agg35b)
+        stop_agg35b
+        ;;
+    agg27b)
+        stop_agg27b
+        ;;
     all)
         stop_coder
         stop_vl
@@ -370,11 +406,13 @@ case "$TARGET" in
         stop_27b
         stop_122b
         stop_omnicoder
+        stop_agg35b
+        stop_agg27b
         kill_all_vllm    # final sweep for any orphaned vLLM workers
         kill_all_sglang  # legacy sweep for any stale SGLang processes
         ;;
     *)
-        echo "Usage: $0 [coder|vl|vl4b|27b|122b|omnicoder|all]"
+        echo "Usage: $0 [coder|vl|vl4b|27b|122b|omnicoder|agg35b|agg27b|all]"
         exit 1
         ;;
 esac
