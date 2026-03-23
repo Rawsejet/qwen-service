@@ -21,6 +21,10 @@ PID_FILE_27B=$LOG_DIR/${MODEL_PIDS[4]}
 PID_FILE_122B=$LOG_DIR/${MODEL_PIDS[5]}
 PORT_OMNICODER=${MODEL_PORTS[6]}
 PID_FILE_OMNICODER=$LOG_DIR/${MODEL_PIDS[6]}
+PORT_AGG35B=${MODEL_PORTS[7]}
+PID_FILE_AGG35B=$LOG_DIR/${MODEL_PIDS[7]}
+PORT_AGG27B=${MODEL_PORTS[8]}
+PID_FILE_AGG27B=$LOG_DIR/${MODEL_PIDS[8]}
 BACKEND_FILE=$LOG_DIR/qwen-server.backend
 
 # NCCL tuning for RTX PRO 6000 Blackwell (SM120, PCIe PHB topology, no NVLink):
@@ -1356,6 +1360,295 @@ elif [ "$model_choice" == "6" ]; then
     echo "Logs: $LOG_FILE"
     echo ""
     wait_for_vllm $PORT_OMNICODER $PID_FILE_OMNICODER $LOG_FILE
+
+elif [ "$model_choice" == "7" ]; then
+
+# ─────────────────────────────────────────────
+# QWEN3.5-35B-A3B AGGRESSIVE (MoE, BF16 GGUF, llama.cpp)
+# ─────────────────────────────────────────────
+
+    if [ -f "$PID_FILE_AGG35B" ]; then
+        PID=$(cat "$PID_FILE_AGG35B")
+        if ps -p $PID > /dev/null 2>&1; then
+            echo "Aggressive-35B server already running with PID $PID"
+            exit 1
+        fi
+    fi
+
+    source ~/.cuda13_env
+
+    MODEL_PATH=~/models/qwen3/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-BF16/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-BF16.gguf
+    LLAMA_BIN=~/llama.cpp/build/bin/llama-server
+    LOG_FILE=$LOG_DIR/aggressive-35b-llama.log
+
+    if [ ! -f "$MODEL_PATH" ]; then
+        echo "Model not found: $MODEL_PATH"
+        exit 1
+    fi
+
+    echo ""
+    echo "Choose GPU configuration:"
+    echo "  (Model is 65GB BF16 — requires dual GPU or single GPU with partial offload)"
+    echo ""
+    echo "1) Dual GPU (full offload, ~131K context)"
+    echo "   - Model split across both GPUs"
+    echo ""
+    echo "2) Dual GPU (full offload, ~262K context)"
+    echo "   - Maximum context, high VRAM usage"
+    echo ""
+    read -p "Enter choice [1-2]: " gpu_choice
+
+    case $gpu_choice in
+        1)
+            CUDA_DEVICES="0,1"
+            GPU_LAYERS=999
+            TENSOR_SPLIT="--tensor-split 50,50"
+            CTX_SIZE=131072
+            GPU_LABEL="Dual GPU 50/50, 131K ctx"
+            ;;
+        2)
+            CUDA_DEVICES="0,1"
+            GPU_LAYERS=999
+            TENSOR_SPLIT="--tensor-split 50,50"
+            CTX_SIZE=262144
+            GPU_LABEL="Dual GPU 50/50, 262K ctx"
+            ;;
+        *)
+            echo "Invalid choice. Exiting."
+            exit 1
+            ;;
+    esac
+
+    echo ""
+    echo "Choose sampling preset:"
+    echo ""
+    echo "1) Thinking / General   temp=1.0, top_p=0.95, top_k=20, presence_penalty=1.5"
+    echo "2) Thinking / Coding    temp=0.6, top_p=0.95, top_k=20, presence_penalty=0.0"
+    echo "3) Non-Think / General  temp=0.7, top_p=0.8,  top_k=20, presence_penalty=1.5"
+    echo "4) Non-Think / Reason   temp=1.0, top_p=1.0,  top_k=40, presence_penalty=2.0"
+    echo ""
+    read -p "Enter choice [1-4]: " sampling_choice
+
+    case $sampling_choice in
+        1)
+            SAMPLING_LABEL="Thinking/General"
+            TEMP=1.0; TOP_P=0.95; TOP_K=20; PRESENCE=1.5
+            ;;
+        2)
+            SAMPLING_LABEL="Thinking/Coding"
+            TEMP=0.6; TOP_P=0.95; TOP_K=20; PRESENCE=0.0
+            ;;
+        3)
+            SAMPLING_LABEL="NonThink/General"
+            TEMP=0.7; TOP_P=0.8; TOP_K=20; PRESENCE=1.5
+            ;;
+        4)
+            SAMPLING_LABEL="NonThink/Reasoning"
+            TEMP=1.0; TOP_P=1.0; TOP_K=40; PRESENCE=2.0
+            ;;
+        *)
+            echo "Invalid choice. Exiting."
+            exit 1
+            ;;
+    esac
+
+    echo ""
+    echo "Configuration:"
+    echo "  Backend:     llama.cpp"
+    echo "  Model:       Qwen3.5-35B-A3B Aggressive (BF16, 65GB, MoE 256E 8+1)"
+    echo "  GPUs:        $GPU_LABEL"
+    echo "  Sampling:    $SAMPLING_LABEL  (temp=$TEMP, top_p=$TOP_P, top_k=$TOP_K, presence=$PRESENCE)"
+    echo "  Context:     $CTX_SIZE tokens"
+    echo "  Port:        $PORT_AGG35B"
+    echo ""
+
+    CUDA_VISIBLE_DEVICES=$CUDA_DEVICES nohup "$LLAMA_BIN" \
+        --model "$MODEL_PATH" \
+        --jinja \
+        --n-gpu-layers $GPU_LAYERS \
+        $TENSOR_SPLIT \
+        --ctx-size $CTX_SIZE \
+        --flash-attn on \
+        --cache-type-k f16 \
+        --cache-type-v f16 \
+        --temp $TEMP \
+        --top-p $TOP_P \
+        --top-k $TOP_K \
+        --host 127.0.0.1 \
+        --port $PORT_AGG35B \
+        --threads 16 \
+        --batch-size 4096 \
+        --ubatch-size 1024 \
+        --poll 100 \
+        --mlock \
+        > "$LOG_FILE" 2>&1 &
+
+    echo $! > "$PID_FILE_AGG35B"
+    echo "llama.cpp" > "$LOG_DIR/aggressive-35b-server.backend"
+    echo "Server started with PID $(cat $PID_FILE_AGG35B)"
+    echo "Logs: $LOG_FILE"
+    echo ""
+    echo "Waiting for server to be ready..."
+    for i in {1..120}; do
+        if curl -s http://127.0.0.1:$PORT_AGG35B/health > /dev/null 2>&1; then
+            echo "✓ Server is ready!"
+            echo ""
+            echo "Test with:"
+            echo "  curl http://127.0.0.1:$PORT_AGG35B/v1/chat/completions \\"
+            echo "    -H 'Content-Type: application/json' \\"
+            echo "    -d '{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":50}'"
+            exit 0
+        fi
+        sleep 1
+    done
+    echo "Server may still be starting. Check logs: tail -f $LOG_FILE"
+
+elif [ "$model_choice" == "8" ]; then
+
+# ─────────────────────────────────────────────
+# QWEN3.5-27B AGGRESSIVE (Dense, BF16 GGUF, llama.cpp)
+# ─────────────────────────────────────────────
+
+    if [ -f "$PID_FILE_AGG27B" ]; then
+        PID=$(cat "$PID_FILE_AGG27B")
+        if ps -p $PID > /dev/null 2>&1; then
+            echo "Aggressive-27B server already running with PID $PID"
+            exit 1
+        fi
+    fi
+
+    source ~/.cuda13_env
+
+    MODEL_PATH=~/models/qwen3/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-BF16/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-BF16.gguf
+    LLAMA_BIN=~/llama.cpp/build/bin/llama-server
+    LOG_FILE=$LOG_DIR/aggressive-27b-llama.log
+
+    if [ ! -f "$MODEL_PATH" ]; then
+        echo "Model not found: $MODEL_PATH"
+        exit 1
+    fi
+
+    echo ""
+    echo "Choose GPU configuration:"
+    echo "  (Model is 51GB BF16 — fits on single GPU or split across two)"
+    echo ""
+    echo "1) Single GPU (full offload, ~131K context)"
+    echo "   - 51GB model on one 96GB GPU, leaves other free"
+    echo ""
+    echo "2) Dual GPU (split, ~262K context)"
+    echo "   - Maximum context across both GPUs"
+    echo ""
+    read -p "Enter choice [1-2]: " gpu_choice
+
+    case $gpu_choice in
+        1)
+            echo ""
+            echo "Which GPU to use?"
+            echo "  0) GPU 0"
+            echo "  1) GPU 1"
+            read -p "Enter GPU [0-1]: " gpu_id
+            case $gpu_id in
+                0|1)
+                    CUDA_DEVICES="$gpu_id"
+                    OTHER_GPU=$(( 1 - gpu_id ))
+                    echo "Starting on GPU $gpu_id (GPU $OTHER_GPU remains free)..."
+                    ;;
+                *)
+                    echo "Invalid GPU. Exiting."
+                    exit 1
+                    ;;
+            esac
+            GPU_LAYERS=999
+            TENSOR_SPLIT=""
+            CTX_SIZE=131072
+            GPU_LABEL="Single GPU $gpu_id, 131K ctx"
+            ;;
+        2)
+            CUDA_DEVICES="0,1"
+            GPU_LAYERS=999
+            TENSOR_SPLIT="--tensor-split 50,50"
+            CTX_SIZE=262144
+            GPU_LABEL="Dual GPU 50/50, 262K ctx"
+            ;;
+        *)
+            echo "Invalid choice. Exiting."
+            exit 1
+            ;;
+    esac
+
+    echo ""
+    echo "Choose sampling preset:"
+    echo ""
+    echo "1) Thinking / Default   temp=0.6, top_p=0.95, top_k=20"
+    echo "2) Non-Think / General  temp=0.7, top_p=0.8,  top_k=20"
+    echo ""
+    read -p "Enter choice [1-2]: " sampling_choice
+
+    case $sampling_choice in
+        1)
+            SAMPLING_LABEL="Thinking/Default"
+            TEMP=0.6; TOP_P=0.95; TOP_K=20
+            ;;
+        2)
+            SAMPLING_LABEL="NonThink/General"
+            TEMP=0.7; TOP_P=0.8; TOP_K=20
+            ;;
+        *)
+            echo "Invalid choice. Exiting."
+            exit 1
+            ;;
+    esac
+
+    echo ""
+    echo "Configuration:"
+    echo "  Backend:     llama.cpp"
+    echo "  Model:       Qwen3.5-27B Aggressive (BF16, 51GB, dense)"
+    echo "  GPUs:        $GPU_LABEL"
+    echo "  Sampling:    $SAMPLING_LABEL  (temp=$TEMP, top_p=$TOP_P, top_k=$TOP_K)"
+    echo "  Context:     $CTX_SIZE tokens"
+    echo "  Port:        $PORT_AGG27B"
+    echo ""
+
+    CUDA_VISIBLE_DEVICES=$CUDA_DEVICES nohup "$LLAMA_BIN" \
+        --model "$MODEL_PATH" \
+        --jinja \
+        --n-gpu-layers $GPU_LAYERS \
+        $TENSOR_SPLIT \
+        --ctx-size $CTX_SIZE \
+        --flash-attn on \
+        --cache-type-k f16 \
+        --cache-type-v f16 \
+        --temp $TEMP \
+        --top-p $TOP_P \
+        --top-k $TOP_K \
+        --host 127.0.0.1 \
+        --port $PORT_AGG27B \
+        --threads 16 \
+        --batch-size 4096 \
+        --ubatch-size 1024 \
+        --poll 100 \
+        --mlock \
+        > "$LOG_FILE" 2>&1 &
+
+    echo $! > "$PID_FILE_AGG27B"
+    echo "llama.cpp" > "$LOG_DIR/aggressive-27b-server.backend"
+    echo "Server started with PID $(cat $PID_FILE_AGG27B)"
+    echo "Logs: $LOG_FILE"
+    echo ""
+    echo "Waiting for server to be ready..."
+    for i in {1..120}; do
+        if curl -s http://127.0.0.1:$PORT_AGG27B/health > /dev/null 2>&1; then
+            echo "✓ Server is ready!"
+            echo ""
+            echo "Test with:"
+            echo "  curl http://127.0.0.1:$PORT_AGG27B/v1/chat/completions \\"
+            echo "    -H 'Content-Type: application/json' \\"
+            echo "    -d '{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":50}'"
+            exit 0
+        fi
+        sleep 1
+    done
+    echo "Server may still be starting. Check logs: tail -f $LOG_FILE"
 
 else
     echo "Invalid choice. Exiting."
