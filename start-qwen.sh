@@ -1388,25 +1388,50 @@ elif [ "$model_choice" == "7" ]; then
 
     echo ""
     echo "Choose GPU configuration:"
-    echo "  (Model is 65GB BF16 — requires dual GPU or single GPU with partial offload)"
+    echo "  (Model is 65GB BF16 — fits on a single 96GB GPU)"
     echo ""
-    echo "1) Dual GPU (full offload, ~131K context)"
+    echo "1) Single GPU (~31K context)"
+    echo "   - 65GB model on one 96GB GPU, leaves other free"
+    echo ""
+    echo "2) Dual GPU (~131K context)"
     echo "   - Model split across both GPUs"
     echo ""
-    echo "2) Dual GPU (full offload, ~262K context)"
+    echo "3) Dual GPU (~262K context)"
     echo "   - Maximum context, high VRAM usage"
     echo ""
-    read -p "Enter choice [1-2]: " gpu_choice
+    read -p "Enter choice [1-3]: " gpu_choice
 
     case $gpu_choice in
         1)
+            echo ""
+            echo "Which GPU to use?"
+            echo "  0) GPU 0"
+            echo "  1) GPU 1"
+            read -p "Enter GPU [0-1]: " gpu_id
+            case $gpu_id in
+                0|1)
+                    CUDA_DEVICES="$gpu_id"
+                    OTHER_GPU=$(( 1 - gpu_id ))
+                    echo "Starting on GPU $gpu_id (GPU $OTHER_GPU remains free)..."
+                    ;;
+                *)
+                    echo "Invalid GPU. Exiting."
+                    exit 1
+                    ;;
+            esac
+            GPU_LAYERS=999
+            TENSOR_SPLIT=""
+            CTX_SIZE=32768
+            GPU_LABEL="Single GPU $gpu_id, 32K ctx"
+            ;;
+        2)
             CUDA_DEVICES="0,1"
             GPU_LAYERS=999
             TENSOR_SPLIT="--tensor-split 50,50"
             CTX_SIZE=131072
             GPU_LABEL="Dual GPU 50/50, 131K ctx"
             ;;
-        2)
+        3)
             CUDA_DEVICES="0,1"
             GPU_LAYERS=999
             TENSOR_SPLIT="--tensor-split 50,50"
