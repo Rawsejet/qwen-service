@@ -1535,7 +1535,7 @@ elif [ "$model_choice" == "7" ]; then
 elif [ "$model_choice" == "8" ]; then
 
 # ─────────────────────────────────────────────
-# QWEN3.5-27B AGGRESSIVE (Dense, BF16 GGUF, llama.cpp)
+# QWEN3.6-27B AGGRESSIVE (Dense, Q8 GGUF, llama.cpp)
 # ─────────────────────────────────────────────
 
     if [ -f "$PID_FILE_AGG27B" ]; then
@@ -1548,7 +1548,7 @@ elif [ "$model_choice" == "8" ]; then
 
     source ~/.cuda13_env
 
-    MODEL_PATH=~/models/qwen3/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-BF16/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-BF16.gguf
+    MODEL_PATH=~/models/qwen3/Qwen3.6-27B-Uncensored-HauhauCS-Aggressive/Qwen3.6-27B-Uncensored-HauhauCS-Aggressive-Q8_K_P.gguf
     LLAMA_BIN=~/llama.cpp/build/bin/llama-server
     LOG_FILE=$LOG_DIR/aggressive-27b-llama.log
 
@@ -1559,7 +1559,7 @@ elif [ "$model_choice" == "8" ]; then
 
     echo ""
     echo "Choose GPU configuration:"
-    echo "  (Model is 51GB BF16 — fits on single GPU or split across two)"
+    echo "  (Model is 30GB Q8 — fits on single GPU or split across two)"
     echo ""
     echo "1) Single GPU (full offload, ~131K context)"
     echo "   - 51GB model on one 96GB GPU, leaves other free"
@@ -1631,7 +1631,7 @@ elif [ "$model_choice" == "8" ]; then
     echo ""
     echo "Configuration:"
     echo "  Backend:     llama.cpp"
-    echo "  Model:       Qwen3.5-27B Aggressive (BF16, 51GB, dense)"
+    echo "  Model:       Qwen3.6-27B Aggressive (Q8, 30GB, dense)"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  (temp=$TEMP, top_p=$TOP_P, top_k=$TOP_K)"
     echo "  Context:     $CTX_SIZE tokens"
