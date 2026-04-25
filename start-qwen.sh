@@ -1548,7 +1548,7 @@ elif [ "$model_choice" == "8" ]; then
 
     source ~/.cuda13_env
 
-    MODEL_PATH=~/models/qwen3/Qwen3.6-27B-Uncensored-HauhauCS-Aggressive/Qwen3.6-27B-Uncensored-HauhauCS-Aggressive-Q8_K_P.gguf
+    MODEL_PATH="$HOME/models/qwen3/Qwen3.6-27B-Uncensored-HauhauCS-Aggressive /Qwen3.6-27B-Uncensored-HauhauCS-Aggressive-Q8_K_P.gguf"
     LLAMA_BIN=~/llama.cpp/build/bin/llama-server
     LOG_FILE=$LOG_DIR/aggressive-27b-llama.log
 
