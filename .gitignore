@@ -1,4 +1,7 @@
 *.log
 *.pid
+*.port
+*.backend
 nohup.out
 feedback.md
+*\ (Copy)*
