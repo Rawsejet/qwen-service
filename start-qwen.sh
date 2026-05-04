@@ -1,34 +1,13 @@
 #!/bin/bash
 # Start Qwen3 Model Server - Interactive Mode Selection
-# Supports: Qwen3-Coder-Next-FP8 (port 8085), Qwen3-VL-32B-FP8 (port 8086)
 # Backends: vLLM, llama.cpp
+# Port is selected interactively (defaults in models.conf)
 
 LOG_DIR=~/qwen-service
 
 # Source shared model registry
 source "$LOG_DIR/models.conf"
 
-# Derive convenience aliases from the registry
-PORT_CODER=${MODEL_PORTS[1]}
-PORT_VL4B=${MODEL_PORTS[2]}
-PORT_VL=${MODEL_PORTS[3]}
-PORT_27B=${MODEL_PORTS[4]}
-PORT_122B=${MODEL_PORTS[5]}
-PID_FILE_CODER=$LOG_DIR/${MODEL_PIDS[1]}
-PID_FILE_VL4B=$LOG_DIR/${MODEL_PIDS[2]}
-PID_FILE_VL=$LOG_DIR/${MODEL_PIDS[3]}
-PID_FILE_27B=$LOG_DIR/${MODEL_PIDS[4]}
-PID_FILE_122B=$LOG_DIR/${MODEL_PIDS[5]}
-PORT_OMNICODER=${MODEL_PORTS[6]}
-PID_FILE_OMNICODER=$LOG_DIR/${MODEL_PIDS[6]}
-PORT_AGG35B=${MODEL_PORTS[7]}
-PID_FILE_AGG35B=$LOG_DIR/${MODEL_PIDS[7]}
-PORT_AGG27B=${MODEL_PORTS[8]}
-PID_FILE_AGG27B=$LOG_DIR/${MODEL_PIDS[8]}
-PORT_Q36_35B=${MODEL_PORTS[9]}
-PID_FILE_Q36_35B=$LOG_DIR/${MODEL_PIDS[9]}
-PORT_Q36_27B=${MODEL_PORTS[10]}
-PID_FILE_Q36_27B=$LOG_DIR/${MODEL_PIDS[10]}
 BACKEND_FILE=$LOG_DIR/qwen-server.backend
 
 # NCCL tuning for RTX PRO 6000 Blackwell (SM120, PCIe PHB topology, no NVLink):
@@ -114,19 +93,30 @@ echo ""
 echo "Choose model:"
 echo ""
 for i in $(seq 1 $MODEL_COUNT); do
-    printf "%d) %-22s (port %s)\n" "$i" "${MODEL_NAMES[$i]}" "${MODEL_PORTS[$i]}"
+    printf "%d) %-22s\n" "$i" "${MODEL_NAMES[$i]}"
     echo "   ${MODEL_DESCS[$i]}"
     echo ""
 done
 read -p "Enter choice [1-$MODEL_COUNT]: " model_choice
 
 # ─────────────────────────────────────────────
+# Port selection
+# ─────────────────────────────────────────────
+PID_FILE=$LOG_DIR/${MODEL_PIDS[$model_choice]}
+PORT_FILE="${PID_FILE%.pid}.port"
+DEFAULT_PORT=${MODEL_DEFAULT_PORTS[$model_choice]}
+
+echo ""
+read -p "Port [default: $DEFAULT_PORT]: " port_input
+PORT=${port_input:-$DEFAULT_PORT}
+
+# ─────────────────────────────────────────────
 # QWEN3-CODER-NEXT
 # ─────────────────────────────────────────────
 if [ "$model_choice" == "1" ]; then
 
-    if [ -f "$PID_FILE_CODER" ]; then
-        PID=$(cat "$PID_FILE_CODER")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "Coder server already running with PID $PID"
             exit 1
@@ -227,14 +217,14 @@ if [ "$model_choice" == "1" ]; then
         echo "  Model:       Qwen3-Coder-Next-FP8"
         echo "  GPUs:        $GPU_LABEL"
         echo "  Context:     $MAX_MODEL_LEN tokens"
-        echo "  Port:        $PORT_CODER"
+        echo "  Port:        $PORT"
         echo ""
 
         env $NCCL_ENV \
         CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
         nohup vllm serve "$MODEL_PATH" \
             --host 127.0.0.1 \
-            --port $PORT_CODER \
+            --port $PORT \
             --tensor-parallel-size $TP_SIZE \
             --max-model-len $MAX_MODEL_LEN \
             --gpu-memory-utilization $GPU_UTIL \
@@ -246,12 +236,13 @@ if [ "$model_choice" == "1" ]; then
             --disable-custom-all-reduce \
             > "$LOG_FILE" 2>&1 &
 
-        echo $! > "$PID_FILE_CODER"
+        echo $! > "$PID_FILE"
+        echo "$PORT" > "$PORT_FILE"
         echo "vllm" > "$BACKEND_FILE"
-        echo "Server started with PID $(cat $PID_FILE_CODER)"
+        echo "Server started with PID $(cat $PID_FILE)"
         echo "Logs: $LOG_FILE"
         echo ""
-        wait_for_vllm $PORT_CODER $PID_FILE_CODER $LOG_FILE
+        wait_for_vllm $PORT $PID_FILE $LOG_FILE
 
     # ── llama.cpp ─────────────────────────────
     elif [ "$backend_choice" == "2" ]; then
@@ -392,7 +383,7 @@ if [ "$model_choice" == "1" ]; then
         echo "  GPUs:        $SPLIT_LABEL"
         echo "  Context:     $CTX_SIZE tokens"
         echo "  Parallel:    $PARALLEL_SLOTS slot(s)"
-        echo "  Port:        $PORT_CODER"
+        echo "  Port:        $PORT"
         echo ""
 
         if [ "$PARALLEL_SLOTS" -ge 4 ] && [ "$CTX_SIZE" -ge 131072 ]; then
@@ -433,7 +424,7 @@ if [ "$model_choice" == "1" ]; then
             --top-k 40 \
             --min_p 0.01 \
             --host 127.0.0.1 \
-            --port $PORT_CODER \
+            --port $PORT \
             --threads 16 \
             --batch-size 4096 \
             --ubatch-size 1024 \
@@ -441,14 +432,15 @@ if [ "$model_choice" == "1" ]; then
             --mlock \
             > "$LOG_FILE" 2>&1 &
 
-        echo $! > "$PID_FILE_CODER"
+        echo $! > "$PID_FILE"
+        echo "$PORT" > "$PORT_FILE"
         echo "llama.cpp" > "$BACKEND_FILE"
-        echo "Server started with PID $(cat $PID_FILE_CODER)"
+        echo "Server started with PID $(cat $PID_FILE)"
         echo "Logs: $LOG_FILE"
         echo ""
         echo "Waiting for server to be ready..."
         for i in {1..60}; do
-            if curl -s http://127.0.0.1:$PORT_CODER/health > /dev/null 2>&1; then
+            if curl -s http://127.0.0.1:$PORT/health > /dev/null 2>&1; then
                 echo "✓ Server is ready!"
                 exit 0
             fi
@@ -466,8 +458,8 @@ if [ "$model_choice" == "1" ]; then
 # ─────────────────────────────────────────────
 elif [ "$model_choice" == "2" ]; then
 
-    if [ -f "$PID_FILE_VL4B" ]; then
-        PID=$(cat "$PID_FILE_VL4B")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "VL-4B server already running with PID $PID"
             exit 1
@@ -575,14 +567,14 @@ elif [ "$model_choice" == "2" ]; then
     echo "  Model:       Qwen3-VL-4B-FP8"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Context:     $MAX_MODEL_LEN tokens"
-    echo "  Port:        $PORT_VL4B"
+    echo "  Port:        $PORT"
     echo ""
 
     env $NCCL_ENV \
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
     nohup vllm serve "$MODEL_PATH" \
         --host 127.0.0.1 \
-        --port $PORT_VL4B \
+        --port $PORT \
         --tensor-parallel-size $TP_SIZE \
         --max-model-len $MAX_MODEL_LEN \
         --gpu-memory-utilization $GPU_UTIL \
@@ -594,19 +586,20 @@ elif [ "$model_choice" == "2" ]; then
         --limit-mm-per-prompt '{"image": 5, "video": 1}' \
         > "$LOG_FILE" 2>&1 &
 
-    echo $! > "$PID_FILE_VL4B"
-    echo "Server started with PID $(cat $PID_FILE_VL4B)"
+    echo $! > "$PID_FILE"
+    echo "$PORT" > "$PORT_FILE"
+    echo "Server started with PID $(cat $PID_FILE)"
     echo "Logs: $LOG_FILE"
     echo ""
-    wait_for_vllm $PORT_VL4B $PID_FILE_VL4B $LOG_FILE
+    wait_for_vllm $PORT $PID_FILE $LOG_FILE
 
 # ─────────────────────────────────────────────
 # QWEN3-VL-32B
 # ─────────────────────────────────────────────
 elif [ "$model_choice" == "3" ]; then
 
-    if [ -f "$PID_FILE_VL" ]; then
-        PID=$(cat "$PID_FILE_VL")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "VL server already running with PID $PID"
             exit 1
@@ -648,7 +641,7 @@ elif [ "$model_choice" == "3" ]; then
             MAX_MODEL_LEN=32768
             GPU_LABEL="Dual GPU - Shared mode (0.55 util)"
             echo ""
-            echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+            echo "Note: Make sure Coder is running in shared mode (0.60 util)"
             ;;
         *)
             echo "Invalid choice. Exiting."
@@ -662,14 +655,14 @@ elif [ "$model_choice" == "3" ]; then
     echo "  Model:       Qwen3-VL-32B-FP8"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Context:     $MAX_MODEL_LEN tokens"
-    echo "  Port:        $PORT_VL"
+    echo "  Port:        $PORT"
     echo ""
 
     env $NCCL_ENV \
     CUDA_VISIBLE_DEVICES=0,1 \
     nohup vllm serve "$MODEL_PATH" \
         --host 127.0.0.1 \
-        --port $PORT_VL \
+        --port $PORT \
         --tensor-parallel-size 2 \
         --max-model-len $MAX_MODEL_LEN \
         --gpu-memory-utilization $GPU_UTIL \
@@ -680,16 +673,17 @@ elif [ "$model_choice" == "3" ]; then
         --limit-mm-per-prompt '{"image": 5, "video": 1}' \
         > "$LOG_FILE" 2>&1 &
 
-    echo $! > "$PID_FILE_VL"
-    echo "Server started with PID $(cat $PID_FILE_VL)"
+    echo $! > "$PID_FILE"
+    echo "$PORT" > "$PORT_FILE"
+    echo "Server started with PID $(cat $PID_FILE)"
     echo "Logs: $LOG_FILE"
     echo ""
-    wait_for_vllm $PORT_VL $PID_FILE_VL $LOG_FILE
+    wait_for_vllm $PORT $PID_FILE $LOG_FILE
 
 elif [ "$model_choice" == "4" ]; then
 
-    if [ -f "$PID_FILE_27B" ]; then
-        PID=$(cat "$PID_FILE_27B")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "Qwen3.5-27B server already running with PID $PID"
             exit 1
@@ -784,7 +778,7 @@ elif [ "$model_choice" == "4" ]; then
                 MAX_MODEL_LEN=131072
                 GPU_LABEL="Dual GPU - Shared mode"
                 echo ""
-                echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+                echo "Note: Make sure Coder is running in shared mode (0.60 util)"
                 ;;
             *)
                 echo "Invalid choice. Exiting."
@@ -845,7 +839,7 @@ elif [ "$model_choice" == "4" ]; then
                 MAX_MODEL_LEN=65536
                 GPU_LABEL="Dual GPU - Shared mode"
                 echo ""
-                echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+                echo "Note: Make sure Coder is running in shared mode (0.60 util)"
                 ;;
             *)
                 echo "Invalid choice. Exiting."
@@ -946,7 +940,7 @@ CONF
     echo "  Mode:        $MODE_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  ($SAMPLING_PARAMS)"
     echo "  Context:     $MAX_MODEL_LEN tokens"
-    echo "  Port:        $PORT_27B"
+    echo "  Port:        $PORT"
     echo ""
     echo "  Note: /think and /no_think are NOT supported on Qwen3.5."
     echo "        Use enable_thinking=$ENABLE_THINKING in chat_template_kwargs."
@@ -966,7 +960,7 @@ CONF
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
     nohup vllm serve "$MODEL_PATH" \
         --host 127.0.0.1 \
-        --port $PORT_27B \
+        --port $PORT \
         --tensor-parallel-size $TP_SIZE \
         --gpu-memory-utilization $MEM_FRAC \
         --max-model-len $MAX_MODEL_LEN \
@@ -981,17 +975,18 @@ CONF
         "${SPEC_ARGS[@]}" \
         > "$LOG_FILE" 2>&1 &
 
-    echo $! > "$PID_FILE_27B"
+    echo $! > "$PID_FILE"
+    echo "$PORT" > "$PORT_FILE"
     echo "vllm" > ~/qwen-service/qwen-27b-server.backend
-    echo "Server started with PID $(cat $PID_FILE_27B)"
+    echo "Server started with PID $(cat $PID_FILE)"
     echo "Logs: $LOG_FILE"
     echo ""
-    wait_for_vllm_then_continue $PORT_27B $PID_FILE_27B $LOG_FILE
+    wait_for_vllm_then_continue $PORT $PID_FILE $LOG_FILE
 
     # Warmup: pay the ~50s Triton compilation cost now, not on the first real request
     echo "Running warmup request (Triton kernel compilation, ~50s)..."
     WARMUP_START=$SECONDS
-    curl -s http://127.0.0.1:$PORT_27B/v1/chat/completions \
+    curl -s http://127.0.0.1:$PORT/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d "{
             \"model\": \"Qwen3.5-27B\",
@@ -1003,7 +998,7 @@ CONF
     echo "✓ Warmup done (${WARMUP_ELAPSED}s). Server is ready for real requests."
     echo ""
     echo "Test with:"
-    echo "  curl http://127.0.0.1:$PORT_27B/v1/models | python3 -m json.tool"
+    echo "  curl http://127.0.0.1:$PORT/v1/models | python3 -m json.tool"
     echo ""
 
 elif [ "$model_choice" == "5" ]; then
@@ -1012,8 +1007,8 @@ elif [ "$model_choice" == "5" ]; then
 # QWEN3.5-122B-A10B
 # ─────────────────────────────────────────────
 
-    if [ -f "$PID_FILE_122B" ]; then
-        PID=$(cat "$PID_FILE_122B")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "Qwen3.5-122B-A10B server already running with PID $PID"
             exit 1
@@ -1081,7 +1076,7 @@ elif [ "$model_choice" == "5" ]; then
             MAX_MODEL_LEN=32768
             GPU_LABEL="Dual GPU - Shared mode (0.65 util)"
             echo ""
-            echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+            echo "Note: Make sure Coder is running in shared mode (0.60 util)"
             ;;
         *)
             echo "Invalid choice. Exiting."
@@ -1173,7 +1168,7 @@ elif [ "$model_choice" == "5" ]; then
     echo "  Mode:        $MODE_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  ($SAMPLING_PARAMS)"
     echo "  Context:     $MAX_MODEL_LEN tokens"
-    echo "  Port:        $PORT_122B"
+    echo "  Port:        $PORT"
     echo ""
     echo "  Note: /think and /no_think are NOT supported on Qwen3.5."
     echo "        Use enable_thinking=$ENABLE_THINKING in chat_template_kwargs."
@@ -1191,7 +1186,7 @@ elif [ "$model_choice" == "5" ]; then
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
     nohup vllm serve "$MODEL_PATH" \
         --host 127.0.0.1 \
-        --port $PORT_122B \
+        --port $PORT \
         --tensor-parallel-size $TP_SIZE \
         --gpu-memory-utilization $MEM_FRAC \
         --max-model-len $MAX_MODEL_LEN \
@@ -1206,16 +1201,17 @@ elif [ "$model_choice" == "5" ]; then
         "${SPEC_ARGS[@]}" \
         > "$LOG_FILE" 2>&1 &
 
-    echo $! > "$PID_FILE_122B"
+    echo $! > "$PID_FILE"
+    echo "$PORT" > "$PORT_FILE"
     echo "vllm" > ~/qwen-service/qwen-122b-server.backend
-    echo "Server started with PID $(cat $PID_FILE_122B)"
+    echo "Server started with PID $(cat $PID_FILE)"
     echo "Logs: $LOG_FILE"
     echo ""
-    wait_for_vllm_then_continue $PORT_122B $PID_FILE_122B $LOG_FILE
+    wait_for_vllm_then_continue $PORT $PID_FILE $LOG_FILE
 
     echo "Running warmup request (Triton kernel compilation, ~50s)..."
     WARMUP_START=$SECONDS
-    curl -s http://127.0.0.1:$PORT_122B/v1/chat/completions \
+    curl -s http://127.0.0.1:$PORT/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d "{
             \"model\": \"Qwen3.5-122B-A10B\",
@@ -1227,7 +1223,7 @@ elif [ "$model_choice" == "5" ]; then
     echo "✓ Warmup done (${WARMUP_ELAPSED}s). Server is ready for real requests."
     echo ""
     echo "Test with:"
-    echo "  curl http://127.0.0.1:$PORT_122B/v1/models | python3 -m json.tool"
+    echo "  curl http://127.0.0.1:$PORT/v1/models | python3 -m json.tool"
     echo ""
 
 elif [ "$model_choice" == "6" ]; then
@@ -1236,8 +1232,8 @@ elif [ "$model_choice" == "6" ]; then
 # OMNICODER-9B
 # ─────────────────────────────────────────────
 
-    if [ -f "$PID_FILE_OMNICODER" ]; then
-        PID=$(cat "$PID_FILE_OMNICODER")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "OmniCoder-9B server already running with PID $PID"
             exit 1
@@ -1335,7 +1331,7 @@ elif [ "$model_choice" == "6" ]; then
     echo "  Model:       OmniCoder-9B"
     echo "  GPUs:        $GPU_LABEL"
     echo "  Context:     $MAX_MODEL_LEN tokens"
-    echo "  Port:        $PORT_OMNICODER"
+    echo "  Port:        $PORT"
     echo ""
 
     # Activate env with vLLM 0.17.1+ (cu130) which supports Qwen3_5ForConditionalGeneration
@@ -1346,7 +1342,7 @@ elif [ "$model_choice" == "6" ]; then
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
     nohup vllm serve "$MODEL_PATH" \
         --host 127.0.0.1 \
-        --port $PORT_OMNICODER \
+        --port $PORT \
         --tensor-parallel-size $TP_SIZE \
         --max-model-len $MAX_MODEL_LEN \
         --gpu-memory-utilization $GPU_UTIL \
@@ -1359,11 +1355,12 @@ elif [ "$model_choice" == "6" ]; then
         --disable-custom-all-reduce \
         > "$LOG_FILE" 2>&1 &
 
-    echo $! > "$PID_FILE_OMNICODER"
-    echo "Server started with PID $(cat $PID_FILE_OMNICODER)"
+    echo $! > "$PID_FILE"
+    echo "$PORT" > "$PORT_FILE"
+    echo "Server started with PID $(cat $PID_FILE)"
     echo "Logs: $LOG_FILE"
     echo ""
-    wait_for_vllm $PORT_OMNICODER $PID_FILE_OMNICODER $LOG_FILE
+    wait_for_vllm $PORT $PID_FILE $LOG_FILE
 
 elif [ "$model_choice" == "7" ]; then
 
@@ -1371,8 +1368,8 @@ elif [ "$model_choice" == "7" ]; then
 # QWEN3.5-35B-A3B AGGRESSIVE (MoE, BF16 GGUF, llama.cpp)
 # ─────────────────────────────────────────────
 
-    if [ -f "$PID_FILE_AGG35B" ]; then
-        PID=$(cat "$PID_FILE_AGG35B")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "Aggressive-35B server already running with PID $PID"
             exit 1
@@ -1488,7 +1485,7 @@ elif [ "$model_choice" == "7" ]; then
     echo "  GPUs:        $GPU_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  (temp=$TEMP, top_p=$TOP_P, top_k=$TOP_K, presence=$PRESENCE)"
     echo "  Context:     $CTX_SIZE tokens"
-    echo "  Port:        $PORT_AGG35B"
+    echo "  Port:        $PORT"
     echo ""
 
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES nohup "$LLAMA_BIN" \
@@ -1504,7 +1501,7 @@ elif [ "$model_choice" == "7" ]; then
         --top-p $TOP_P \
         --top-k $TOP_K \
         --host 127.0.0.1 \
-        --port $PORT_AGG35B \
+        --port $PORT \
         --threads 16 \
         --batch-size 4096 \
         --ubatch-size 1024 \
@@ -1512,18 +1509,19 @@ elif [ "$model_choice" == "7" ]; then
         --mlock \
         > "$LOG_FILE" 2>&1 &
 
-    echo $! > "$PID_FILE_AGG35B"
+    echo $! > "$PID_FILE"
+    echo "$PORT" > "$PORT_FILE"
     echo "llama.cpp" > "$LOG_DIR/aggressive-35b-server.backend"
-    echo "Server started with PID $(cat $PID_FILE_AGG35B)"
+    echo "Server started with PID $(cat $PID_FILE)"
     echo "Logs: $LOG_FILE"
     echo ""
     echo "Waiting for server to be ready..."
     for i in {1..120}; do
-        if curl -s http://127.0.0.1:$PORT_AGG35B/health > /dev/null 2>&1; then
+        if curl -s http://127.0.0.1:$PORT/health > /dev/null 2>&1; then
             echo "✓ Server is ready!"
             echo ""
             echo "Test with:"
-            echo "  curl http://127.0.0.1:$PORT_AGG35B/v1/chat/completions \\"
+            echo "  curl http://127.0.0.1:$PORT/v1/chat/completions \\"
             echo "    -H 'Content-Type: application/json' \\"
             echo "    -d '{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":50}'"
             exit 0
@@ -1538,8 +1536,8 @@ elif [ "$model_choice" == "8" ]; then
 # QWEN3.6-27B AGGRESSIVE (Dense, Q8 GGUF, llama.cpp)
 # ─────────────────────────────────────────────
 
-    if [ -f "$PID_FILE_AGG27B" ]; then
-        PID=$(cat "$PID_FILE_AGG27B")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "Aggressive-27B server already running with PID $PID"
             exit 1
@@ -1635,7 +1633,7 @@ elif [ "$model_choice" == "8" ]; then
     echo "  GPUs:        $GPU_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  (temp=$TEMP, top_p=$TOP_P, top_k=$TOP_K)"
     echo "  Context:     $CTX_SIZE tokens"
-    echo "  Port:        $PORT_AGG27B"
+    echo "  Port:        $PORT"
     echo ""
 
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES nohup "$LLAMA_BIN" \
@@ -1651,7 +1649,7 @@ elif [ "$model_choice" == "8" ]; then
         --top-p $TOP_P \
         --top-k $TOP_K \
         --host 127.0.0.1 \
-        --port $PORT_AGG27B \
+        --port $PORT \
         --threads 16 \
         --batch-size 4096 \
         --ubatch-size 1024 \
@@ -1659,18 +1657,19 @@ elif [ "$model_choice" == "8" ]; then
         --mlock \
         > "$LOG_FILE" 2>&1 &
 
-    echo $! > "$PID_FILE_AGG27B"
+    echo $! > "$PID_FILE"
+    echo "$PORT" > "$PORT_FILE"
     echo "llama.cpp" > "$LOG_DIR/aggressive-27b-server.backend"
-    echo "Server started with PID $(cat $PID_FILE_AGG27B)"
+    echo "Server started with PID $(cat $PID_FILE)"
     echo "Logs: $LOG_FILE"
     echo ""
     echo "Waiting for server to be ready..."
     for i in {1..120}; do
-        if curl -s http://127.0.0.1:$PORT_AGG27B/health > /dev/null 2>&1; then
+        if curl -s http://127.0.0.1:$PORT/health > /dev/null 2>&1; then
             echo "✓ Server is ready!"
             echo ""
             echo "Test with:"
-            echo "  curl http://127.0.0.1:$PORT_AGG27B/v1/chat/completions \\"
+            echo "  curl http://127.0.0.1:$PORT/v1/chat/completions \\"
             echo "    -H 'Content-Type: application/json' \\"
             echo "    -d '{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":50}'"
             exit 0
@@ -1685,8 +1684,8 @@ elif [ "$model_choice" == "9" ]; then
 # QWEN3.6-35B-A3B-FP8 (MoE, vLLM)
 # ─────────────────────────────────────────────
 
-    if [ -f "$PID_FILE_Q36_35B" ]; then
-        PID=$(cat "$PID_FILE_Q36_35B")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "Qwen3.6-35B-A3B server already running with PID $PID"
             exit 1
@@ -1758,7 +1757,7 @@ elif [ "$model_choice" == "9" ]; then
             MAX_MODEL_LEN=131072
             GPU_LABEL="Dual GPU - Shared mode (0.55 util)"
             echo ""
-            echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+            echo "Note: Make sure Coder is running in shared mode (0.60 util)"
             ;;
         *)
             echo "Invalid choice. Exiting."
@@ -1851,7 +1850,7 @@ elif [ "$model_choice" == "9" ]; then
     echo "  Mode:        $MODE_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  ($SAMPLING_PARAMS)"
     echo "  Context:     $MAX_MODEL_LEN tokens"
-    echo "  Port:        $PORT_Q36_35B"
+    echo "  Port:        $PORT"
     echo ""
 
     SPEC_ARGS=()
@@ -1866,7 +1865,7 @@ elif [ "$model_choice" == "9" ]; then
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
     nohup vllm serve "$MODEL_PATH" \
         --host 127.0.0.1 \
-        --port $PORT_Q36_35B \
+        --port $PORT \
         --tensor-parallel-size $TP_SIZE \
         --gpu-memory-utilization $MEM_FRAC \
         --max-model-len $MAX_MODEL_LEN \
@@ -1881,16 +1880,17 @@ elif [ "$model_choice" == "9" ]; then
         "${SPEC_ARGS[@]}" \
         > "$LOG_FILE" 2>&1 &
 
-    echo $! > "$PID_FILE_Q36_35B"
+    echo $! > "$PID_FILE"
+    echo "$PORT" > "$PORT_FILE"
     echo "vllm" > ~/qwen-service/qwen36-35b-server.backend
-    echo "Server started with PID $(cat $PID_FILE_Q36_35B)"
+    echo "Server started with PID $(cat $PID_FILE)"
     echo "Logs: $LOG_FILE"
     echo ""
-    wait_for_vllm_then_continue $PORT_Q36_35B $PID_FILE_Q36_35B $LOG_FILE
+    wait_for_vllm_then_continue $PORT $PID_FILE $LOG_FILE
 
     echo "Running warmup request (Triton kernel compilation, ~50s)..."
     WARMUP_START=$SECONDS
-    curl -s http://127.0.0.1:$PORT_Q36_35B/v1/chat/completions \
+    curl -s http://127.0.0.1:$PORT/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d "{
             \"model\": \"Qwen3.6-35B-A3B\",
@@ -1902,7 +1902,7 @@ elif [ "$model_choice" == "9" ]; then
     echo "✓ Warmup done (${WARMUP_ELAPSED}s). Server is ready for real requests."
     echo ""
     echo "Test with:"
-    echo "  curl http://127.0.0.1:$PORT_Q36_35B/v1/models | python3 -m json.tool"
+    echo "  curl http://127.0.0.1:$PORT/v1/models | python3 -m json.tool"
     echo ""
 
 elif [ "$model_choice" == "10" ]; then
@@ -1911,8 +1911,8 @@ elif [ "$model_choice" == "10" ]; then
 # QWEN3.6-27B-FP8 (Dense, vLLM)
 # ─────────────────────────────────────────────
 
-    if [ -f "$PID_FILE_Q36_27B" ]; then
-        PID=$(cat "$PID_FILE_Q36_27B")
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
         if ps -p $PID > /dev/null 2>&1; then
             echo "Qwen3.6-27B server already running with PID $PID"
             exit 1
@@ -1984,7 +1984,7 @@ elif [ "$model_choice" == "10" ]; then
             MAX_MODEL_LEN=131072
             GPU_LABEL="Dual GPU - Shared mode (0.55 util)"
             echo ""
-            echo "Note: Make sure Coder is running in shared mode (0.60 util) on port $PORT_CODER"
+            echo "Note: Make sure Coder is running in shared mode (0.60 util)"
             ;;
         *)
             echo "Invalid choice. Exiting."
@@ -2077,7 +2077,7 @@ elif [ "$model_choice" == "10" ]; then
     echo "  Mode:        $MODE_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  ($SAMPLING_PARAMS)"
     echo "  Context:     $MAX_MODEL_LEN tokens"
-    echo "  Port:        $PORT_Q36_27B"
+    echo "  Port:        $PORT"
     echo ""
 
     SPEC_ARGS=()
@@ -2092,7 +2092,7 @@ elif [ "$model_choice" == "10" ]; then
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES \
     nohup vllm serve "$MODEL_PATH" \
         --host 127.0.0.1 \
-        --port $PORT_Q36_27B \
+        --port $PORT \
         --tensor-parallel-size $TP_SIZE \
         --gpu-memory-utilization $MEM_FRAC \
         --max-model-len $MAX_MODEL_LEN \
@@ -2107,16 +2107,17 @@ elif [ "$model_choice" == "10" ]; then
         "${SPEC_ARGS[@]}" \
         > "$LOG_FILE" 2>&1 &
 
-    echo $! > "$PID_FILE_Q36_27B"
+    echo $! > "$PID_FILE"
+    echo "$PORT" > "$PORT_FILE"
     echo "vllm" > ~/qwen-service/qwen36-27b-server.backend
-    echo "Server started with PID $(cat $PID_FILE_Q36_27B)"
+    echo "Server started with PID $(cat $PID_FILE)"
     echo "Logs: $LOG_FILE"
     echo ""
-    wait_for_vllm_then_continue $PORT_Q36_27B $PID_FILE_Q36_27B $LOG_FILE
+    wait_for_vllm_then_continue $PORT $PID_FILE $LOG_FILE
 
     echo "Running warmup request (Triton kernel compilation, ~50s)..."
     WARMUP_START=$SECONDS
-    curl -s http://127.0.0.1:$PORT_Q36_27B/v1/chat/completions \
+    curl -s http://127.0.0.1:$PORT/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d "{
             \"model\": \"Qwen3.6-27B\",
@@ -2128,7 +2129,7 @@ elif [ "$model_choice" == "10" ]; then
     echo "✓ Warmup done (${WARMUP_ELAPSED}s). Server is ready for real requests."
     echo ""
     echo "Test with:"
-    echo "  curl http://127.0.0.1:$PORT_Q36_27B/v1/models | python3 -m json.tool"
+    echo "  curl http://127.0.0.1:$PORT/v1/models | python3 -m json.tool"
     echo ""
 
 else

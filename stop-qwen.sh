@@ -27,6 +27,18 @@ BACKEND_FILE=~/qwen-service/qwen-server.backend
 BACKEND_FILE_27B=~/qwen-service/qwen-27b-server.backend
 BACKEND_FILE_122B=~/qwen-service/qwen-122b-server.backend
 
+# Read port from .port file (saved by start-qwen.sh), fall back to default
+read_port() {
+    local PID_FILE=$1
+    local DEFAULT=$2
+    local PORT_FILE="${PID_FILE%.pid}.port"
+    if [ -f "$PORT_FILE" ]; then
+        cat "$PORT_FILE"
+    else
+        echo "$DEFAULT"
+    fi
+}
+
 # ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
@@ -58,8 +70,15 @@ kill_vllm_by_port() {
 kill_all_vllm() {
     echo "Sweeping all vLLM processes..."
 
+    # Collect ports from .port files + defaults
+    ALL_PORTS="8085 8086 8087 8088 8089 8090 8091 8092 8093 8094"
+    for pf in ~/qwen-service/*.port; do
+        [ -f "$pf" ] && ALL_PORTS="$ALL_PORTS $(cat "$pf")"
+    done
+    ALL_PORTS=$(echo "$ALL_PORTS" | tr ' ' '\n' | sort -u)
+
     # Kill by port for all known model ports
-    for PORT in 8085 8086 8087 8088 8089 8090 8091 8092 8093 8094; do
+    for PORT in $ALL_PORTS; do
         fuser -k ${PORT}/tcp 2>/dev/null
     done
 
@@ -76,7 +95,7 @@ kill_all_vllm() {
     sleep 3
 
     # Force-kill any survivors
-    for PORT in 8085 8086 8087 8088 8089 8090 8091 8092 8093 8094; do
+    for PORT in $ALL_PORTS; do
         fuser -9k ${PORT}/tcp 2>/dev/null
     done
     pkill -9 -f "vllm serve" 2>/dev/null
@@ -199,126 +218,136 @@ kill_llama_cpp() {
 }
 
 stop_coder() {
+    local PORT=$(read_port "$PID_FILE_CODER" 8085)
     BACKEND="unknown"
     [ -f "$BACKEND_FILE" ] && BACKEND=$(cat "$BACKEND_FILE")
     case "$BACKEND" in
         vllm)
-            kill_vllm_by_port 8085 "$PID_FILE_CODER" "Qwen3-Coder (vLLM)"
+            kill_vllm_by_port $PORT "$PID_FILE_CODER" "Qwen3-Coder (vLLM)"
             ;;
         llama.cpp)
             kill_llama_cpp "$PID_FILE_CODER"
             ;;
         sglang)
-            kill_sglang "$PID_FILE_CODER" 8085 "Qwen3-Coder (SGLang)"
+            kill_sglang "$PID_FILE_CODER" $PORT "Qwen3-Coder (SGLang)"
             ;;
         *)
-            echo "Unknown backend for Coder — sweeping port 8085..."
-            kill_vllm_by_port 8085 "$PID_FILE_CODER" "Qwen3-Coder"
+            echo "Unknown backend for Coder — sweeping port $PORT..."
+            kill_vllm_by_port $PORT "$PID_FILE_CODER" "Qwen3-Coder"
             pkill -f "llama-server" 2>/dev/null
             ;;
     esac
-    rm -f "$PID_FILE_CODER" "$BACKEND_FILE"
+    rm -f "$PID_FILE_CODER" "${PID_FILE_CODER%.pid}.port" "$BACKEND_FILE"
     echo "✓ Coder server stopped."
 }
 
 stop_vl() {
+    local PORT=$(read_port "$PID_FILE_VL" 8086)
     if [ -f "$PID_FILE_VL" ]; then
-        kill_vllm_by_port 8086 "$PID_FILE_VL" "Qwen3-VL-32B (vLLM)"
+        kill_vllm_by_port $PORT "$PID_FILE_VL" "Qwen3-VL-32B (vLLM)"
     else
-        echo "No VL-32B PID file — sweeping port 8086..."
-        fuser -9k 8086/tcp 2>/dev/null
+        echo "No VL-32B PID file — sweeping port $PORT..."
+        fuser -9k ${PORT}/tcp 2>/dev/null
     fi
-    rm -f "$PID_FILE_VL"
+    rm -f "$PID_FILE_VL" "${PID_FILE_VL%.pid}.port"
     echo "✓ VL-32B server stopped."
 }
 
 stop_vl4b() {
+    local PORT=$(read_port "$PID_FILE_VL4B" 8088)
     if [ -f "$PID_FILE_VL4B" ]; then
-        kill_vllm_by_port 8088 "$PID_FILE_VL4B" "Qwen3-VL-4B (vLLM)"
+        kill_vllm_by_port $PORT "$PID_FILE_VL4B" "Qwen3-VL-4B (vLLM)"
     else
-        echo "No VL-4B PID file — sweeping port 8088..."
-        fuser -9k 8088/tcp 2>/dev/null
+        echo "No VL-4B PID file — sweeping port $PORT..."
+        fuser -9k ${PORT}/tcp 2>/dev/null
     fi
-    rm -f "$PID_FILE_VL4B"
+    rm -f "$PID_FILE_VL4B" "${PID_FILE_VL4B%.pid}.port"
     echo "✓ VL-4B server stopped."
 }
 
 stop_27b() {
+    local PORT=$(read_port "$PID_FILE_27B" 8087)
     BACKEND="unknown"
     [ -f "$BACKEND_FILE_27B" ] && BACKEND=$(cat "$BACKEND_FILE_27B")
     case "$BACKEND" in
         vllm)
-            kill_vllm_by_port 8087 "$PID_FILE_27B" "Qwen3.5-27B (vLLM)"
+            kill_vllm_by_port $PORT "$PID_FILE_27B" "Qwen3.5-27B (vLLM)"
             ;;
         sglang)
             # Legacy: 27B was previously served via SGLang
-            kill_sglang "$PID_FILE_27B" 8087 "Qwen3.5-27B (SGLang)"
+            kill_sglang "$PID_FILE_27B" $PORT "Qwen3.5-27B (SGLang)"
             ;;
         *)
-            echo "Unknown backend for 27B — sweeping port 8087..."
-            kill_vllm_by_port 8087 "$PID_FILE_27B" "Qwen3.5-27B"
-            kill_sglang "$PID_FILE_27B" 8087 "Qwen3.5-27B (stale SGLang sweep)"
+            echo "Unknown backend for 27B — sweeping port $PORT..."
+            kill_vllm_by_port $PORT "$PID_FILE_27B" "Qwen3.5-27B"
+            kill_sglang "$PID_FILE_27B" $PORT "Qwen3.5-27B (stale SGLang sweep)"
             ;;
     esac
-    rm -f "$PID_FILE_27B" "$BACKEND_FILE_27B"
+    rm -f "$PID_FILE_27B" "${PID_FILE_27B%.pid}.port" "$BACKEND_FILE_27B"
     echo "✓ 27B server stopped."
 }
 
 stop_122b() {
+    local PORT=$(read_port "$PID_FILE_122B" 8089)
     if [ -f "$PID_FILE_122B" ]; then
-        kill_vllm_by_port 8089 "$PID_FILE_122B" "Qwen3.5-122B-A10B (vLLM)"
+        kill_vllm_by_port $PORT "$PID_FILE_122B" "Qwen3.5-122B-A10B (vLLM)"
     else
-        echo "No 122B PID file — sweeping port 8089..."
-        fuser -9k 8089/tcp 2>/dev/null
+        echo "No 122B PID file — sweeping port $PORT..."
+        fuser -9k ${PORT}/tcp 2>/dev/null
     fi
-    rm -f "$PID_FILE_122B" "$BACKEND_FILE_122B"
+    rm -f "$PID_FILE_122B" "${PID_FILE_122B%.pid}.port" "$BACKEND_FILE_122B"
     echo "✓ 122B server stopped."
 }
 
 stop_omnicoder() {
+    local PORT=$(read_port "$PID_FILE_OMNICODER" 8090)
     if [ -f "$PID_FILE_OMNICODER" ]; then
-        kill_vllm_by_port 8090 "$PID_FILE_OMNICODER" "OmniCoder-9B (vLLM)"
+        kill_vllm_by_port $PORT "$PID_FILE_OMNICODER" "OmniCoder-9B (vLLM)"
     else
-        echo "No OmniCoder-9B PID file — sweeping port 8090..."
-        fuser -9k 8090/tcp 2>/dev/null
+        echo "No OmniCoder-9B PID file — sweeping port $PORT..."
+        fuser -9k ${PORT}/tcp 2>/dev/null
     fi
-    rm -f "$PID_FILE_OMNICODER"
+    rm -f "$PID_FILE_OMNICODER" "${PID_FILE_OMNICODER%.pid}.port"
     echo "✓ OmniCoder-9B server stopped."
 }
 
 stop_agg35b() {
+    local PORT=$(read_port "$PID_FILE_AGG35B" 8091)
     kill_llama_cpp "$PID_FILE_AGG35B"
-    fuser -9k 8091/tcp 2>/dev/null
-    rm -f "$PID_FILE_AGG35B" ~/qwen-service/aggressive-35b-server.backend
+    fuser -9k ${PORT}/tcp 2>/dev/null
+    rm -f "$PID_FILE_AGG35B" "${PID_FILE_AGG35B%.pid}.port" ~/qwen-service/aggressive-35b-server.backend
     echo "✓ Aggressive-35B server stopped."
 }
 
 stop_agg27b() {
+    local PORT=$(read_port "$PID_FILE_AGG27B" 8092)
     kill_llama_cpp "$PID_FILE_AGG27B"
-    fuser -9k 8092/tcp 2>/dev/null
-    rm -f "$PID_FILE_AGG27B" ~/qwen-service/aggressive-27b-server.backend
+    fuser -9k ${PORT}/tcp 2>/dev/null
+    rm -f "$PID_FILE_AGG27B" "${PID_FILE_AGG27B%.pid}.port" ~/qwen-service/aggressive-27b-server.backend
     echo "✓ Aggressive-27B server stopped."
 }
 
 stop_q36_35b() {
+    local PORT=$(read_port "$PID_FILE_Q36_35B" 8093)
     if [ -f "$PID_FILE_Q36_35B" ]; then
-        kill_vllm_by_port 8093 "$PID_FILE_Q36_35B" "Qwen3.6-35B-A3B (vLLM)"
+        kill_vllm_by_port $PORT "$PID_FILE_Q36_35B" "Qwen3.6-35B-A3B (vLLM)"
     else
-        echo "No Qwen3.6-35B-A3B PID file — sweeping port 8093..."
-        fuser -9k 8093/tcp 2>/dev/null
+        echo "No Qwen3.6-35B-A3B PID file — sweeping port $PORT..."
+        fuser -9k ${PORT}/tcp 2>/dev/null
     fi
-    rm -f "$PID_FILE_Q36_35B" ~/qwen-service/qwen36-35b-server.backend
+    rm -f "$PID_FILE_Q36_35B" "${PID_FILE_Q36_35B%.pid}.port" ~/qwen-service/qwen36-35b-server.backend
     echo "✓ Qwen3.6-35B-A3B server stopped."
 }
 
 stop_q36_27b() {
+    local PORT=$(read_port "$PID_FILE_Q36_27B" 8094)
     if [ -f "$PID_FILE_Q36_27B" ]; then
-        kill_vllm_by_port 8094 "$PID_FILE_Q36_27B" "Qwen3.6-27B (vLLM)"
+        kill_vllm_by_port $PORT "$PID_FILE_Q36_27B" "Qwen3.6-27B (vLLM)"
     else
-        echo "No Qwen3.6-27B PID file — sweeping port 8094..."
-        fuser -9k 8094/tcp 2>/dev/null
+        echo "No Qwen3.6-27B PID file — sweeping port $PORT..."
+        fuser -9k ${PORT}/tcp 2>/dev/null
     fi
-    rm -f "$PID_FILE_Q36_27B" ~/qwen-service/qwen36-27b-server.backend
+    rm -f "$PID_FILE_Q36_27B" "${PID_FILE_Q36_27B%.pid}.port" ~/qwen-service/qwen36-27b-server.backend
     echo "✓ Qwen3.6-27B server stopped."
 }
 
@@ -357,31 +386,39 @@ if [ -z "$TARGET" ]; then
     [ -f "$PID_FILE_AGG27B" ] && ps -p $(cat "$PID_FILE_AGG27B") > /dev/null 2>&1 && AGG27B_RUNNING=true
     [ -f "$PID_FILE_Q36_35B" ] && ps -p $(cat "$PID_FILE_Q36_35B") > /dev/null 2>&1 && Q36_35B_RUNNING=true
     [ -f "$PID_FILE_Q36_27B" ] && ps -p $(cat "$PID_FILE_Q36_27B") > /dev/null 2>&1 && Q36_27B_RUNNING=true
-    # Also detect by port if no PID file
-    if ! $VL4B_RUNNING && ss -tlnp | grep -q ":8088 " 2>/dev/null; then VL4B_RUNNING=true; fi
-    if ! $B27_RUNNING && ss -tlnp | grep -q ":8087 " 2>/dev/null; then B27_RUNNING=true; fi
-    if ! $B122_RUNNING && ss -tlnp | grep -q ":8089 " 2>/dev/null; then B122_RUNNING=true; fi
-    if ! $OMNICODER_RUNNING && ss -tlnp | grep -q ":8090 " 2>/dev/null; then OMNICODER_RUNNING=true; fi
-    if ! $AGG35B_RUNNING && ss -tlnp | grep -q ":8091 " 2>/dev/null; then AGG35B_RUNNING=true; fi
-    if ! $AGG27B_RUNNING && ss -tlnp | grep -q ":8092 " 2>/dev/null; then AGG27B_RUNNING=true; fi
-    if ! $Q36_35B_RUNNING && ss -tlnp | grep -q ":8093 " 2>/dev/null; then Q36_35B_RUNNING=true; fi
-    if ! $Q36_27B_RUNNING && ss -tlnp | grep -q ":8094 " 2>/dev/null; then Q36_27B_RUNNING=true; fi
+    # Also detect by port if no PID file (check saved port, fall back to default)
+    P_VL4B=$(read_port "$PID_FILE_VL4B" 8088)
+    P_B27=$(read_port "$PID_FILE_27B" 8087)
+    P_B122=$(read_port "$PID_FILE_122B" 8089)
+    P_OMNI=$(read_port "$PID_FILE_OMNICODER" 8090)
+    P_A35=$(read_port "$PID_FILE_AGG35B" 8091)
+    P_A27=$(read_port "$PID_FILE_AGG27B" 8092)
+    P_Q36_35=$(read_port "$PID_FILE_Q36_35B" 8093)
+    P_Q36_27=$(read_port "$PID_FILE_Q36_27B" 8094)
+    if ! $VL4B_RUNNING && ss -tlnp | grep -q ":${P_VL4B} " 2>/dev/null; then VL4B_RUNNING=true; fi
+    if ! $B27_RUNNING && ss -tlnp | grep -q ":${P_B27} " 2>/dev/null; then B27_RUNNING=true; fi
+    if ! $B122_RUNNING && ss -tlnp | grep -q ":${P_B122} " 2>/dev/null; then B122_RUNNING=true; fi
+    if ! $OMNICODER_RUNNING && ss -tlnp | grep -q ":${P_OMNI} " 2>/dev/null; then OMNICODER_RUNNING=true; fi
+    if ! $AGG35B_RUNNING && ss -tlnp | grep -q ":${P_A35} " 2>/dev/null; then AGG35B_RUNNING=true; fi
+    if ! $AGG27B_RUNNING && ss -tlnp | grep -q ":${P_A27} " 2>/dev/null; then AGG27B_RUNNING=true; fi
+    if ! $Q36_35B_RUNNING && ss -tlnp | grep -q ":${P_Q36_35} " 2>/dev/null; then Q36_35B_RUNNING=true; fi
+    if ! $Q36_27B_RUNNING && ss -tlnp | grep -q ":${P_Q36_27} " 2>/dev/null; then Q36_27B_RUNNING=true; fi
 
     echo "========================================="
     echo "  Stop Qwen3 Servers"
     echo "========================================="
     echo ""
     echo "Running:"
-    $CODER_RUNNING      && echo "  ✓ Qwen3-Coder         (port 8085)" || echo "  ✗ Qwen3-Coder         (not running)"
-    $VL_RUNNING         && echo "  ✓ Qwen3-VL-32B        (port 8086)" || echo "  ✗ Qwen3-VL-32B        (not running)"
-    $B27_RUNNING        && echo "  ✓ Qwen3.5-27B         (port 8087)" || echo "  ✗ Qwen3.5-27B         (not running)"
-    $VL4B_RUNNING       && echo "  ✓ Qwen3-VL-4B         (port 8088)" || echo "  ✗ Qwen3-VL-4B         (not running)"
-    $B122_RUNNING       && echo "  ✓ Qwen3.5-122B-A10B   (port 8089)" || echo "  ✗ Qwen3.5-122B-A10B   (not running)"
-    $OMNICODER_RUNNING  && echo "  ✓ OmniCoder-9B        (port 8090)" || echo "  ✗ OmniCoder-9B        (not running)"
-    $AGG35B_RUNNING     && echo "  ✓ Aggressive-35B-A3B  (port 8091)" || echo "  ✗ Aggressive-35B-A3B  (not running)"
-    $AGG27B_RUNNING     && echo "  ✓ Aggressive-27B      (port 8092)" || echo "  ✗ Aggressive-27B      (not running)"
-    $Q36_35B_RUNNING    && echo "  ✓ Qwen3.6-35B-A3B     (port 8093)" || echo "  ✗ Qwen3.6-35B-A3B     (not running)"
-    $Q36_27B_RUNNING    && echo "  ✓ Qwen3.6-27B         (port 8094)" || echo "  ✗ Qwen3.6-27B         (not running)"
+    $CODER_RUNNING      && echo "  ✓ Qwen3-Coder         (port $(read_port "$PID_FILE_CODER" 8085))" || echo "  ✗ Qwen3-Coder         (not running)"
+    $VL_RUNNING         && echo "  ✓ Qwen3-VL-32B        (port $(read_port "$PID_FILE_VL" 8086))" || echo "  ✗ Qwen3-VL-32B        (not running)"
+    $B27_RUNNING        && echo "  ✓ Qwen3.5-27B         (port $P_B27)" || echo "  ✗ Qwen3.5-27B         (not running)"
+    $VL4B_RUNNING       && echo "  ✓ Qwen3-VL-4B         (port $P_VL4B)" || echo "  ✗ Qwen3-VL-4B         (not running)"
+    $B122_RUNNING       && echo "  ✓ Qwen3.5-122B-A10B   (port $P_B122)" || echo "  ✗ Qwen3.5-122B-A10B   (not running)"
+    $OMNICODER_RUNNING  && echo "  ✓ OmniCoder-9B        (port $P_OMNI)" || echo "  ✗ OmniCoder-9B        (not running)"
+    $AGG35B_RUNNING     && echo "  ✓ Aggressive-35B-A3B  (port $P_A35)" || echo "  ✗ Aggressive-35B-A3B  (not running)"
+    $AGG27B_RUNNING     && echo "  ✓ Aggressive-27B      (port $P_A27)" || echo "  ✗ Aggressive-27B      (not running)"
+    $Q36_35B_RUNNING    && echo "  ✓ Qwen3.6-35B-A3B     (port $P_Q36_35)" || echo "  ✗ Qwen3.6-35B-A3B     (not running)"
+    $Q36_27B_RUNNING    && echo "  ✓ Qwen3.6-27B         (port $P_Q36_27)" || echo "  ✗ Qwen3.6-27B         (not running)"
     echo ""
     echo " 1) Stop Coder only"
     echo " 2) Stop VL-32B only"
