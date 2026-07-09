@@ -14,7 +14,11 @@ BACKEND_FILE=$LOG_DIR/qwen-server.backend
 # P2P/CUMEM and P2P/IPC hang on SM120 - working transport is SHM/direct/direct
 # NCCL_P2P_DISABLE=1 + NCCL_CUMEM_ENABLE=0 forces SHM transport which works
 # --disable-custom-all-reduce required: vLLM's custom all-reduce IPC also hangs on SM120
-NCCL_ENV="NCCL_P2P_DISABLE=1 NCCL_CUMEM_ENABLE=0 NCCL_IB_DISABLE=1 VLLM_ENGINE_CORE_STARTUP_TIMEOUT=300 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+# vLLM 0.24+: DeepGemm became the default FP8 GEMM backend and crashes with
+# "Unknown recipe" on Qwen FP8 checkpoints (scale_fmt is not ue8m0) - disable it
+# vLLM 0.24+: hybrid GDN models (Qwen3.6) refuse to start if max_num_seqs exceeds
+# the Mamba cache blocks - vllm serve calls below pass --max-num-seqs 256
+NCCL_ENV="NCCL_P2P_DISABLE=1 NCCL_CUMEM_ENABLE=0 NCCL_IB_DISABLE=1 VLLM_USE_DEEP_GEMM=0 VLLM_MOE_USE_DEEP_GEMM=0 VLLM_ENGINE_CORE_STARTUP_TIMEOUT=300 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 
 wait_for_vllm() {
     local PORT=$1
@@ -1733,7 +1737,7 @@ elif [ "$model_choice" == "9" ]; then
     echo "   - Leaves the other GPU free"
     echo ""
     echo "2) Dual GPU - Solo (0.85 util, ~262K context)"
-    echo "   - Split across both GPUs for max KV cache"
+    echo "   - Max KV cache; likely faster decode (27B measured +53% with TP=2)"
     echo "   - Other models should NOT be running"
     echo ""
     echo "3) Dual GPU - Shared mode (0.55 util, ~131K context)"
@@ -1891,6 +1895,7 @@ elif [ "$model_choice" == "9" ]; then
         --tensor-parallel-size $TP_SIZE \
         --gpu-memory-utilization $MEM_FRAC \
         --max-model-len $MAX_MODEL_LEN \
+        --max-num-seqs 256 \
         --served-model-name "Qwen3.6-35B-A3B" \
         --dtype auto \
         --trust-remote-code \
@@ -1957,11 +1962,11 @@ elif [ "$model_choice" == "10" ]; then
     echo "  (Model is 31GB FP8 — fits easily on a single 96GB GPU)"
     echo ""
     echo "1) Single GPU (0.80 util, ~262K context)"
-    echo "   - Leaves the other GPU free"
+    echo "   - Leaves the other GPU free (~50 tok/s decode, best TTFT under load)"
     echo ""
     echo "2) Dual GPU - Solo (0.85 util, ~262K context)"
-    echo "   - Split across both GPUs for max KV cache"
-    echo "   - Other models should NOT be running"
+    echo "   - Fastest decode: ~77 tok/s, +53% vs single GPU (benchmarked 2026-07)"
+    echo "   - Also max KV cache; other models should NOT be running"
     echo ""
     echo "3) Dual GPU - Shared mode (0.55 util, ~131K context)"
     echo "   - Leaves room for Coder in shared mode (0.60 util)"
@@ -2118,6 +2123,7 @@ elif [ "$model_choice" == "10" ]; then
         --tensor-parallel-size $TP_SIZE \
         --gpu-memory-utilization $MEM_FRAC \
         --max-model-len $MAX_MODEL_LEN \
+        --max-num-seqs 256 \
         --served-model-name "Qwen3.6-27B" \
         --dtype auto \
         --trust-remote-code \
