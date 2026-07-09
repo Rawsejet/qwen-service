@@ -1381,9 +1381,19 @@ elif [ "$model_choice" == "7" ]; then
     MODEL_PATH=~/models/qwen3/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-BF16/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-BF16.gguf
     LLAMA_BIN=~/llama.cpp/build/bin/llama-server
     LOG_FILE=$LOG_DIR/aggressive-35b-llama.log
+    # Patched copy of this GGUF's embedded chat template: merges all system
+    # messages into the leading system block instead of raising, since Claude
+    # Code >=2.1.154 sends system-role entries in messages[] alongside the
+    # top-level system field. Only model 7 uses this file.
+    TEMPLATE_FILE=$LOG_DIR/aggressive-35b-template.jinja
 
     if [ ! -f "$MODEL_PATH" ]; then
         echo "Model not found: $MODEL_PATH"
+        exit 1
+    fi
+
+    if [ ! -f "$TEMPLATE_FILE" ]; then
+        echo "Chat template not found: $TEMPLATE_FILE"
         exit 1
     fi
 
@@ -1491,6 +1501,7 @@ elif [ "$model_choice" == "7" ]; then
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES nohup "$LLAMA_BIN" \
         --model "$MODEL_PATH" \
         --jinja \
+        --chat-template-file "$TEMPLATE_FILE" \
         --n-gpu-layers $GPU_LAYERS \
         $TENSOR_SPLIT \
         --ctx-size $CTX_SIZE \
@@ -1549,9 +1560,19 @@ elif [ "$model_choice" == "8" ]; then
     MODEL_PATH="$HOME/models/qwen3/Qwen3.6-27B-Uncensored-HauhauCS-Aggressive /Qwen3.6-27B-Uncensored-HauhauCS-Aggressive-Q8_K_P.gguf"
     LLAMA_BIN=~/llama.cpp/build/bin/llama-server
     LOG_FILE=$LOG_DIR/aggressive-27b-llama.log
+    # Patched copy of this GGUF's embedded chat template: merges all system
+    # messages into the leading system block instead of raising, since Claude
+    # Code >=2.1.154 sends system-role entries in messages[] alongside the
+    # top-level system field. Only model 8 uses this file.
+    TEMPLATE_FILE=$LOG_DIR/aggressive-27b-template.jinja
 
     if [ ! -f "$MODEL_PATH" ]; then
         echo "Model not found: $MODEL_PATH"
+        exit 1
+    fi
+
+    if [ ! -f "$TEMPLATE_FILE" ]; then
+        echo "Chat template not found: $TEMPLATE_FILE"
         exit 1
     fi
 
@@ -1639,6 +1660,7 @@ elif [ "$model_choice" == "8" ]; then
     CUDA_VISIBLE_DEVICES=$CUDA_DEVICES nohup "$LLAMA_BIN" \
         --model "$MODEL_PATH" \
         --jinja \
+        --chat-template-file "$TEMPLATE_FILE" \
         --n-gpu-layers $GPU_LAYERS \
         $TENSOR_SPLIT \
         --ctx-size $CTX_SIZE \
