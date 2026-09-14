@@ -194,14 +194,14 @@ if [ "$model_choice" == "1" ]; then
             esac
             TP_SIZE=1
             MEM_FRAC=0.85
-            MAX_MODEL_LEN=65536
+            MAX_MODEL_LEN=131072
             GPU_LABEL="Single GPU $gpu_id"
             ;;
         2)
             CUDA_DEVICES="0,1"
             TP_SIZE=2
             MEM_FRAC=0.85
-            MAX_MODEL_LEN=131072
+            MAX_MODEL_LEN=262144
             GPU_LABEL="Dual GPU - Solo"
             ;;
         3)
