@@ -164,18 +164,28 @@ if [ "$model_choice" == "1" ]; then
     echo "Choose GPU configuration:"
     echo "  (Model is ~54GB BF16 — same qwen3_5 hybrid arch as Qwen3.5-27B)"
     echo ""
-    echo "1) Single GPU (0.85 mem, ~65K context)"
+    echo "1) Single GPU (0.85 mem, ~131K context)"
     echo "   - Leaves the other GPU free"
     echo ""
-    echo "2) Dual GPU - Solo (0.85 mem, ~131K context)"
-    echo "   - Split across both GPUs for max context"
+    echo "2) Dual GPU - Solo (0.85 mem, 262K native context)"
+    echo "   - Split across both GPUs for max native context"
     echo "   - Other models should NOT be running"
     echo ""
     echo "3) Dual GPU - Shared mode (0.55 mem, ~65K context)"
     echo "   - Leaves room for another model on both GPUs"
     echo ""
-    read -p "Enter choice [1-3]: " gpu_choice
+    echo "4) Dual GPU - 512K long context (0.85 mem, YaRN 2x)"
+    echo "   - Extends 262K native -> 524288 via YaRN"
+    echo "   - Single-user (~2.9x concurrency); slight quality drift on short prompts"
+    echo ""
+    echo "5) Dual GPU - 1M max context (0.85 mem, YaRN 4x)"
+    echo "   - Extends 262K native -> 1048576 via YaRN (model-card ceiling)"
+    echo "   - Single-user (~1.5x concurrency); more quality drift on short prompts"
+    echo ""
+    read -p "Enter choice [1-5]: " gpu_choice
 
+    # YaRN rope override, only set for the long-context modes (4/5)
+    ROPE_ARGS=()
     case $gpu_choice in
         1)
             echo ""
@@ -210,6 +220,22 @@ if [ "$model_choice" == "1" ]; then
             MEM_FRAC=0.55
             MAX_MODEL_LEN=65536
             GPU_LABEL="Dual GPU - Shared mode"
+            ;;
+        4)
+            CUDA_DEVICES="0,1"
+            TP_SIZE=2
+            MEM_FRAC=0.85
+            MAX_MODEL_LEN=524288
+            ROPE_ARGS=(--hf-overrides '{"text_config": {"rope_parameters": {"mrope_interleaved": true, "mrope_section": [11, 11, 10], "partial_rotary_factor": 0.25, "rope_theta": 10000000, "rope_type": "yarn", "factor": 2.0, "original_max_position_embeddings": 262144}}}')
+            GPU_LABEL="Dual GPU - 512K (YaRN 2x)"
+            ;;
+        5)
+            CUDA_DEVICES="0,1"
+            TP_SIZE=2
+            MEM_FRAC=0.85
+            MAX_MODEL_LEN=1048576
+            ROPE_ARGS=(--hf-overrides '{"text_config": {"rope_parameters": {"mrope_interleaved": true, "mrope_section": [11, 11, 10], "partial_rotary_factor": 0.25, "rope_theta": 10000000, "rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 262144}}}')
+            GPU_LABEL="Dual GPU - 1M (YaRN 4x)"
             ;;
         *)
             echo "Invalid choice. Exiting."
@@ -330,7 +356,11 @@ CONF
     echo "  Host:        $HOST  ($HOST_LABEL)"
     echo "  Mode:        $MODE_LABEL"
     echo "  Sampling:    $SAMPLING_LABEL  ($SAMPLING_PARAMS)"
-    echo "  Context:     $MAX_MODEL_LEN tokens  (262K native, YaRN-extensible to 1M)"
+    if [ ${#ROPE_ARGS[@]} -gt 0 ]; then
+        echo "  Context:     $MAX_MODEL_LEN tokens  (YaRN-extended over 262K native — expect slight quality drift on short prompts)"
+    else
+        echo "  Context:     $MAX_MODEL_LEN tokens  (262K native, YaRN-extensible to 1M via options 4/5)"
+    fi
     echo "  Port:        $PORT"
     echo ""
     echo "  Note: Thinking is ON by default. Disable per request with"
@@ -355,6 +385,7 @@ CONF
         --gpu-memory-utilization $MEM_FRAC \
         --max-model-len $MAX_MODEL_LEN \
         --max-num-seqs 256 \
+        "${ROPE_ARGS[@]}" \
         "${QUANT_ARGS[@]}" \
         --served-model-name "Qwen3.8-27B" \
         --dtype auto \

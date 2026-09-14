@@ -57,6 +57,24 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8085/v1/messag
 ## Related
 
 Same restart bumped the dual-GPU (TP2) context from 131072 → **262144** (model's
-native max; `rope_scaling: none`). Measured KV budget at 0.85 util / TP2 =
-1,519,664 tokens → 5.8× concurrency at 262k. Reflected in `start-qwen.sh` model 1
-(single-GPU 65536→131072, dual-solo 131072→262144).
+native max). Measured KV budget at 0.85 util / TP2 = ~1.52M tokens → 5.8×
+concurrency at 262k. Reflected in `start-qwen.sh` model 1 (single-GPU
+65536→131072, dual-solo 131072→262144).
+
+## Long-context (YaRN) options — start-qwen.sh model 1, modes 4 & 5
+
+This is a transformers-5.x mrope VL model: rope lives in
+`text_config.rope_parameters` (`rope_type: default`, `rope_theta: 1e7`,
+`partial_rotary_factor: 0.25`), **not** the classic `rope_scaling`. To exceed the
+262K native max, override `rope_parameters` to `rope_type: yarn` with a `factor`,
+via `--hf-overrides` (pass the *full* rope_parameters dict — vLLM replaces the
+sub-dict, so preserve `mrope_interleaved`/`mrope_section`/`partial_rotary_factor`/
+`rope_theta`). Verified 2026-09-14 on vLLM 0.24.0:
+
+- **Mode 4 — 512K:** factor 2.0 → `--max-model-len 524288` (~2.9× concurrency)
+- **Mode 5 — 1M:** factor 4.0 → `--max-model-len 1048576`; measured KV
+  1,550,275 tokens → **1.48×** concurrency (fits one full 1M request). `effort:high`
+  generation confirmed working under YaRN.
+
+YaRN slightly degrades quality on short prompts, so these are opt-in menu modes;
+the daily `claude-qwen` driver stays on **262K native** (mode 2).
